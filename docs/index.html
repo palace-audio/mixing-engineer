@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Mix Engineer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <span id="status" class="disconnected" title="no API key"></span>
+  <span id="usage" title="session cost"></span>
+  <button id="settings-gear" title="Settings" aria-label="Settings">⚙</button>
+  <div id="settings-menu" class="hidden">
+    <a href="#" id="settings-change">Change API key</a>
+    <a href="#" id="settings-clear">Clear API key</a>
+  </div>
+
+  <div id="messages"></div>
+  <div id="input-row">
+    <textarea id="input" placeholder="Ask about your mix..." rows="2"></textarea>
+    <button id="send">Send</button>
+  </div>
+</div>
+
+<div id="settings-overlay" class="hidden">
+  <div id="settings-card">
+    <h2>Anthropic API key</h2>
+    <p>The device sends your mix analysis to Claude. You provide your own key so usage cost stays on your account.</p>
+    <input id="settings-key-input" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+    <div id="settings-error"></div>
+    <div id="settings-actions">
+      <button id="settings-cancel" class="hidden">Cancel</button>
+      <button id="settings-save">Save</button>
+    </div>
+    <div id="settings-help">
+      <span>Get a key from console.anthropic.com (open in your browser)</span>
+      <span> · </span>
+      <a href="#" id="settings-why">Why?</a>
+    </div>
+    <p id="settings-why-text" class="hidden">
+      Your key is stored locally on this machine only (in jweb's localStorage), never sent anywhere except api.anthropic.com.
+      Anthropic charges your account per token used. Typical mix analysis: $0.01–0.10 per question.
+    </p>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
