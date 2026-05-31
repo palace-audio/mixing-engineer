@@ -25,3 +25,4 @@
 
 # Legacy Node leftovers (in case anything regenerates)
 node_modules/
+.Rhistory
