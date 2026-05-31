@@ -6,7 +6,7 @@ It's not a replacement for ears. It's a second opinion you can ask things like "
 
 ## Rationale and Philosophy
 
-I beleive that mixing music is a skill (objective) and an art (subjective) at the same time. In the countless hours that I taught myself producing, I realized that achieving the sound I want requires **applying the objective to the subjective** - especially in dance music. 
+I believe that mixing music is a skill (objective) and an art (subjective) at the same time. In the countless hours that I taught myself producing, I realized that achieving the sound I want requires **applying the objective to the subjective** - especially in dance music. 
 
 I navigated the producer journey with every tool available to me: video tutorials, webpages & blogs, mentors & established producers, and finally, artificial intelligence. In my experience, information is abundant but the more detailed my questions were, the less I was able to benefit from any one source.
 
