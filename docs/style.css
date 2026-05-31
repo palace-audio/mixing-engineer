@@ -1,0 +1,269 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #app { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+#app { display: flex; flex-direction: column; position: relative; }
+
+#status {
+  position: absolute;
+  top: 6px;
+  right: 28px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  z-index: 10;
+  pointer-events: none;
+}
+#status.connected { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
+#status.disconnected { background: #e57373; box-shadow: 0 0 4px #e57373; }
+
+#usage {
+  position: absolute;
+  top: 4px;
+  right: 42px;
+  font-size: 10px;
+  color: #888;
+  z-index: 10;
+  pointer-events: none;
+  font-family: monospace;
+}
+
+#settings-gear {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 14px;
+  z-index: 11;
+  padding: 2px 4px;
+  line-height: 1;
+}
+#settings-gear:hover { color: #ccc; }
+
+#settings-menu {
+  position: absolute;
+  top: 22px;
+  right: 4px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 4px 0;
+  z-index: 20;
+  min-width: 140px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+#settings-menu.hidden { display: none; }
+#settings-menu a {
+  display: block;
+  padding: 6px 12px;
+  color: #ccc;
+  text-decoration: none;
+  font-size: 11px;
+}
+#settings-menu a:hover { background: #353535; color: #fff; }
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg { padding: 8px 12px; border-radius: 6px; line-height: 1.5; }
+.msg.user { background: #2a3f5a; align-self: flex-end; max-width: 80%; white-space: pre-wrap; }
+.msg.assistant { background: #2a2a2a; align-self: flex-start; max-width: 90%; }
+.msg.thinking {
+  align-self: flex-start;
+  background: transparent;
+  padding: 4px 12px;
+}
+.msg.thinking .dots {
+  display: inline-flex;
+  gap: 4px;
+}
+.msg.thinking .dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6a8fcf;
+  opacity: 0.4;
+  animation: thinking-pulse 1.2s infinite ease-in-out;
+}
+.msg.thinking .dots span:nth-child(2) { animation-delay: 0.2s; }
+.msg.thinking .dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinking-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.msg.error { background: #4a2d2d; color: #ffb0b0; align-self: flex-start; }
+
+.msg.assistant p { margin: 0 0 6px 0; }
+.msg.assistant p:last-child { margin-bottom: 0; }
+.msg.assistant strong { color: #fff; font-weight: 600; }
+.msg.assistant em { color: #d4c4a0; font-style: italic; }
+.msg.assistant code {
+  background: #1e1e1e;
+  color: #d4a574;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+}
+.msg.assistant pre {
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 8px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+.msg.assistant pre code { background: none; padding: 0; color: #e0e0e0; font-size: 10.5px; }
+.msg.assistant ul, .msg.assistant ol { margin: 4px 0 6px 0; padding-left: 20px; }
+.msg.assistant li { margin: 2px 0; }
+.msg.assistant h1, .msg.assistant h2, .msg.assistant h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  margin: 8px 0 4px 0;
+}
+.msg.opener {
+  background: #243044;
+  border-left: 2px solid #4a6fa5;
+  max-width: 100%;
+  align-self: stretch;
+}
+.msg.opener hr { border: none; border-top: 1px solid #3a3a3a; margin: 8px 0; }
+
+#input-row {
+  padding: 10px;
+  background: #2a2a2a;
+  border-top: 1px solid #3a3a3a;
+  display: flex;
+  gap: 8px;
+}
+
+#input {
+  flex: 1;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  resize: none;
+}
+#input:focus { outline: none; border-color: #5a5a5a; }
+
+#send {
+  background: #4a6fa5;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0 16px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#send:hover { background: #5a7fb5; }
+#send:disabled { background: #3a3a3a; color: #666; cursor: not-allowed; }
+
+#settings-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(10, 10, 10, 0.85);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#settings-overlay.hidden { display: none; }
+
+#settings-card {
+  background: #232323;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  padding: 18px 22px;
+  max-width: 380px;
+  width: 90%;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+}
+#settings-card h2 {
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: #fff;
+}
+#settings-card p {
+  font-size: 11px;
+  color: #aaa;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+#settings-key-input {
+  width: 100%;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+#settings-key-input:focus { outline: none; border-color: #5a7fb5; }
+
+#settings-error {
+  font-size: 11px;
+  color: #e08585;
+  min-height: 14px;
+  margin-bottom: 8px;
+}
+#settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+#settings-actions button {
+  background: #4a6fa5;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#settings-actions button:hover { background: #5a7fb5; }
+#settings-actions button:disabled { background: #3a3a3a; color: #888; cursor: wait; }
+#settings-actions #settings-cancel { background: #353535; color: #ccc; }
+#settings-actions #settings-cancel:hover { background: #404040; }
+#settings-actions .hidden { display: none; }
+
+#settings-help {
+  font-size: 10px;
+  color: #888;
+}
+#settings-help a {
+  color: #6a8fcf;
+  text-decoration: none;
+}
+#settings-help a:hover { text-decoration: underline; }
+
+#settings-why-text {
+  font-size: 10px !important;
+  color: #888 !important;
+  margin-top: 8px !important;
+  line-height: 1.5 !important;
+}
+#settings-why-text.hidden { display: none; }
