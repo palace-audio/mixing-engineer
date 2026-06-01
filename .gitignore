@@ -7,9 +7,6 @@
 *.maxhelp~
 .maxauto*
 
-# Local backups of the .amxd (we keep these outside the project, but just in case)
-*.amxd.backup-*
-
 # Editor / IDE
 .vscode/
 .idea/
@@ -23,6 +20,7 @@
 # Logs
 *.log
 
-# Legacy Node leftovers (in case anything regenerates)
+# Legacy Node leftovers 
 node_modules/
+
 .Rhistory
