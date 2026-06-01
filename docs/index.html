@@ -7,9 +7,22 @@
 </head>
 <body>
 <div id="app">
-  <span id="status" class="disconnected" title="no API key"></span>
-  <span id="usage" title="session cost"></span>
-  <button id="settings-gear" title="Settings" aria-label="Settings">⚙</button>
+  <div id="titlebar">
+    <div class="brand">
+      <span class="mark">Palace Audio</span>
+      <span class="name">Mixing Engineer</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="metrics">
+      <span class="stat-group">
+        <span id="status" class="disconnected"></span>
+        <span id="status-text">Offline</span>
+      </span>
+      <span id="cost">$0.000</span>
+      <span id="tok">0 tok</span>
+    </div>
+    <button id="settings-gear" title="Settings" aria-label="Settings">⚙</button>
+  </div>
   <div id="settings-menu" class="hidden">
     <a href="#" id="settings-change">Change API key</a>
     <a href="#" id="settings-clear">Clear API key</a>
