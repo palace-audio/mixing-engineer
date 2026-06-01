@@ -1,5 +1,7 @@
 import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.32.1";
 import { tools, runTool } from "./tools.js";
+import { compressToolResult } from "./compress.js";
+import { extractWithRetry } from "./extraction.js";
 
 const MODELS = {
   sonnet: { id: "claude-sonnet-4-6", input: 3, output: 15, cache_write: 3.75, cache_read: 0.30 },
@@ -33,6 +35,20 @@ When a tool returns empty/null data, NEVER invent a reason. Do not say "this is 
 - If your measurement disagrees with the user's framing, say so. Don't bend results to match.
 - Never cherry-pick data to confirm the user's theory.
 
+=== DATA SHAPE CONVENTIONS ===
+
+Tool responses are pre-compressed. Read shapes carefully:
+- spectrum: {hz:[Hz,...], m:[dB_mid,...], sm:[dB_side_minus_mid,...]} parallel arrays at indices i. m[i] is mid-channel dB at hz[i] (1/12-octave, ~120 bins, 20Hz–20kHz).
+- time_series: {t0, dt:0.1, l:[dB,...], r:[dB,...]} parallel arrays. l[i] is dB at time t0 + i*dt (100ms cadence).
+- peak / rms in measurement objects: 2-element arrays [L_dB, R_dB].
+- tracks[] in analyze_section: only tracks with signal in the section are present (silent tracks omitted). Shape: {name, l, r, mute?, group?, return?} where l/r are peak dB on Live's perceptual meter (track-vs-track comparable, not calibrated dBFS).
+- list_tracks shorthand: {i, name, vol (display), pan (display), sends:[{to, db}] non-zero only}. Boolean flags (audio, midi, group, grouped, frozen, arm, mute, solo) only present when true.
+- get_device_params shorthand: {i, name, val (display_value), options (value_items for enums), auto (automation_state non-zero), min/max only if not normalized 0..1}.
+- get_track_routing shorthand: {name, out, in, sends:[{i, db}] non-zero only, monitoring/group if set}.
+- get_track_devices: {i, name, class, chain_path?, off (if inactive), rack (if can_have_chains), gr_db (current gain reduction)}.
+- automation: {"<track / device / param>": [[t, value], ...]} only for params with automation_state ≠ 0.
+- gain_reduction: {"<track / device>": [[t, gr_db], ...]} for Live's Compressor / Glue Compressor / Multiband Dynamics — read how much each comp is actually pulling vs just its threshold setting.
+
 === DATA ===
 
 SESSION STRUCTURE: list_tracks (no track-volume — fader values are compensation, not loudness), get_track_devices, get_device_params, get_track_routing, get_session_overview (call EVERY user turn — cheap, refreshes locators + transport + tempo), get_returns.
@@ -41,11 +57,9 @@ NAME RESOLUTION: track/locator names are matched fuzzily (case-insensitive, subs
 
 AUDIO — analyze_section(start_locator, end_locator?, focus_tracks?, reference?): the SINGLE audio entry point. Captures audio between two locators (or from current position with start_locator="here"+seconds). Returns:
 - section: locator names + duration
-- master: full FFT/peak/RMS/LUFS/PLR/true-peak/stereo-correlation/spectrum/time_series for the section (same schema as before)
-- tracks[]: every track in the set with peak_perceptual, rms_perceptual on Live's 0..1 scale. VALID for track-vs-track comparison within this capture, NOT calibrated dBFS. Grouped child tracks may read 0 — known LiveAPI limitation.
-- focus: if focus_tracks was passed, this object has per-track full analysis (peak/RMS/spectrum/time_series/automation/gain_reduction) — calibrated dBFS via parallel taps, time-aligned. time_series[] is [[t_seconds, rms_l_db, rms_r_db], ...] at 100ms cadence — verify temporal overlap before calling masking. automation is {"<track / device / param>": [[t, value], ...]} for params with automation_state ≠ 0. gain_reduction is {"<track / device>": [[t, gr_db], ...]} for compressors/limiters that expose live GR (Live's Compressor, Glue Compressor, Multiband Dynamics) — use it to read how much each comp is actually pulling vs just its threshold setting.
-- master.automation / master.gain_reduction are the same shape for master-track devices.
-- list_tracks now returns per-track sends[] (with return_name + value), is_grouped, is_frozen, arm, color, playing_slot_index. get_track_devices and get_master_chain return nested rack devices flat with chain_path showing the rack/chain location, and can_have_chains flag on rack containers. get_device_params adds is_quantized, automation_state, and value_items (enum labels) per param.
+- master: full FFT/peak/RMS/LUFS/PLR/true-peak/stereo-correlation/spectrum/time_series for the section, calibrated dBFS.
+- tracks[]: every NON-SILENT track in the section with peak L/R on Live's perceptual meter scale. VALID for track-vs-track comparison within this capture, NOT calibrated dBFS. Grouped child tracks may read 0 — known LiveAPI limitation. Silent tracks are omitted entirely.
+- focus: if focus_tracks was passed, this object has per-track full analysis (peak/rms/spectrum/time_series/automation/gain_reduction) — calibrated dBFS via parallel taps, time-aligned. time_series uses {t0, dt:0.1, l, r} — cross-correlate l/r between tracks for masking vs sidechain. master.automation / master.gain_reduction are the same shape for master-track devices.
 - reference: if reference=true, full analysis of the sidechain-routed reference track.
 
 DECISION TREE for audio questions:
@@ -107,11 +121,54 @@ TOOLS: 1–4 calls then answer. Parallel independent calls at session start: lis
 
 If the user message starts with /debug or is exactly "RUN FULL DIAGNOSTIC", switch to diagnostic mode. Do NOT do mixing interpretation. Run the standard 12-step diagnostic sequence (list_tracks, get_session_overview, get_returns, get_track_devices, get_device_params, get_track_routing, analyze_section "here", analyze_section locator-only, analyze_section with focus_tracks (one typo'd), analyze_section reference=true, save_memory, get_memory) and emit a pipe-table pass/fail report with one final verdict line "DIAGNOSTIC PASSED" or "DIAGNOSTIC FAILED at step N: <reason>". No mixing advice in /debug mode.`;
 
+// 1h cache TTL: write cost ~2x normal vs default 5min, but pays back after
+// one hit past the 5min mark. Mixing sessions routinely pause >5min between
+// turns (listening, A/B'ing), so 1h is strictly better.
+const CACHE_TTL = { type: "ephemeral", ttl: "1h" };
+
+// Builds the messages array sent to the API with cache_control applied at the
+// right breakpoints: one on the message containing get_memory's tool_result
+// (semi-static across the session) and one on the latest message (rolling
+// cache that extends every turn). Combined with system + tools cache, this
+// gives 4 breakpoints — the API maximum.
+function prepareCachedMessages(messages, memoryMessageIndex) {
+  const out = messages.map(msg => {
+    let content = msg.content;
+    if (typeof content === "string") {
+      content = [{ type: "text", text: content }];
+    } else {
+      content = content.map(b => ({ ...b }));
+    }
+    return { role: msg.role, content };
+  });
+  const lastIdx = out.length - 1;
+  if (lastIdx >= 0) {
+    const blocks = out[lastIdx].content;
+    blocks[blocks.length - 1].cache_control = CACHE_TTL;
+  }
+  // Skip if memory message is the latest — would be a redundant breakpoint.
+  if (memoryMessageIndex >= 0 && memoryMessageIndex < lastIdx) {
+    const blocks = out[memoryMessageIndex].content;
+    blocks[blocks.length - 1].cache_control = CACHE_TTL;
+  }
+  return out;
+}
+
+// Cap pending extractions — beyond this, something is wrong (Haiku down,
+// auth failed, etc.) and continuing to schedule retries wastes attempts.
+const MAX_COMPRESSION_BACKLOG = 5;
+
 export class ClaudeSession {
   constructor({ apiKey, model, onText, onToolStart, onDone, onError, onUsage }) {
     this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+    this.apiKey = apiKey;
     this.modelOverride = model || null;
     this.messages = [];
+    this.memoryMessageIndex = -1;
+    this.currentTurnToolResultIndices = [];
+    this.compressionPending = [];
+    this.nextTaskId = 1;
+    this.compressionPaused = false;
     this.onText = onText;
     this.onToolStart = onToolStart;
     this.onDone = onDone;
@@ -129,6 +186,11 @@ export class ClaudeSession {
     this.currentTurnModel = this.modelOverride
       ? Object.values(MODELS).find(m => m.id === this.modelOverride) || MODELS.sonnet
       : pickModel(userMessage);
+    this.currentTurnToolResultIndices = [];
+    // Background: retry any extractions from earlier turns that failed transiently.
+    // Doesn't block the current turn — replacements that complete mid-stream
+    // are seen by subsequent prepareCachedMessages calls.
+    this._retryPendingExtractions();
     this.messages.push({ role: "user", content: userMessage });
     try {
       await this._runLoop();
@@ -137,21 +199,73 @@ export class ClaudeSession {
     }
   }
 
+  _retryPendingExtractions() {
+    if (this.compressionPaused) return;
+    if (this.compressionPending.length > MAX_COMPRESSION_BACKLOG) {
+      this.compressionPaused = true;
+      this.onError?.(`Findings extraction backlog at ${this.compressionPending.length} turns — Haiku may be unreachable. Compression paused for this session.`);
+      return;
+    }
+    for (const entry of [...this.compressionPending]) {
+      this._tryExtract(entry);
+    }
+  }
+
+  async _tryExtract(entry) {
+    entry.attempts++;
+    const result = await extractWithRetry({
+      apiKey: this.apiKey,
+      assistantText: entry.assistantText
+    });
+    // Track Haiku extraction cost as part of the session total.
+    if (result.usage && (result.usage.input || result.usage.output)) {
+      const m = MODELS.haiku;
+      this.totalCostUsd += (result.usage.input * m.input + result.usage.output * m.output) / 1e6;
+      this.onUsage?.({
+        input: this.totalInputTokens,
+        output: this.totalOutputTokens,
+        cache_write: this.totalCacheWriteTokens,
+        cache_read: this.totalCacheReadTokens,
+        cost_usd: this.totalCostUsd
+      });
+    }
+    if (result.ok) {
+      const summary = result.findings
+        ? `[prior turn — findings extracted from full tool output]\n${result.findings}`
+        : `[prior turn — no extractable findings]`;
+      for (const idx of entry.toolResultIndices) {
+        if (idx >= this.messages.length) continue;
+        const msg = this.messages[idx];
+        if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+        for (const block of msg.content) {
+          if (block.type === "tool_result") block.content = summary;
+        }
+      }
+      this.compressionPending = this.compressionPending.filter(e => e.id !== entry.id);
+    } else if (result.classification === "auth" || result.classification === "bad_request") {
+      // Won't fix itself — stop trying this entry; surface the issue.
+      this.compressionPending = this.compressionPending.filter(e => e.id !== entry.id);
+      this.compressionPaused = true;
+      this.onError?.(`Extraction failed (${result.classification}): ${result.error}. Compression paused.`);
+    }
+    // Transient failure: leave in backlog, will retry on next user turn.
+  }
+
   async _streamWithRetry(maxRetries = 4) {
-    // Cache the SYSTEM_PROMPT and tool definitions: subsequent calls within
-    // ~5 min pay ~10% of the input price for those tokens. The cache covers
-    // everything up to and including the block marked with cache_control.
+    // 4 cache breakpoints: system prompt, last tool def, memory message
+    // (when present), latest message (rolling). All use 1h TTL.
     const cachedTools = tools.map((t, i) =>
-      i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+      i === tools.length - 1 ? { ...t, cache_control: CACHE_TTL } : t
     );
+    const cachedMessages = prepareCachedMessages(this.messages, this.memoryMessageIndex);
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await this.client.messages.stream({
           model: this.currentTurnModel.id,
           max_tokens: 2048,
-          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: CACHE_TTL }],
           tools: cachedTools,
-          messages: this.messages
+          messages: cachedMessages
         });
       } catch (e) {
         const transient = e?.status === 529 || e?.status === 503 || e?.status === 429 || e?.error?.type === "overloaded_error" || /overload/i.test(e?.message || "");
@@ -192,22 +306,49 @@ export class ClaudeSession {
 
       if (final.stop_reason !== "tool_use") {
         this.onDone?.();
+        // Schedule background Haiku extraction so the raw tool_result payloads
+        // from this turn can be replaced with a short findings summary on
+        // subsequent turns. Fire-and-forget: success mutates this.messages
+        // directly, transient failures stay in the backlog for next-turn retry.
+        if (this.currentTurnToolResultIndices.length > 0 && !this.compressionPaused) {
+          const assistantText = final.content
+            .filter(b => b.type === "text")
+            .map(b => b.text || "")
+            .join("\n")
+            .trim();
+          if (assistantText) {
+            const entry = {
+              id: this.nextTaskId++,
+              assistantText,
+              toolResultIndices: [...this.currentTurnToolResultIndices],
+              attempts: 0
+            };
+            this.compressionPending.push(entry);
+            this._tryExtract(entry);
+          }
+        }
         return;
       }
 
       const toolResults = [];
+      let memoryCalledThisTurn = false;
       for (const block of final.content) {
         if (block.type === "tool_use") {
           this.onToolStart?.(block.name, block.input);
           const result = await runTool(block.name, block.input);
+          if (block.name === "get_memory") memoryCalledThisTurn = true;
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: JSON.stringify(result)
+            content: JSON.stringify(compressToolResult(block.name, result))
           });
         }
       }
       this.messages.push({ role: "user", content: toolResults });
+      this.currentTurnToolResultIndices.push(this.messages.length - 1);
+      // Mark the message containing get_memory's result as the cache
+      // breakpoint for memory — semi-static for the rest of the session.
+      if (memoryCalledThisTurn) this.memoryMessageIndex = this.messages.length - 1;
     }
   }
 }
