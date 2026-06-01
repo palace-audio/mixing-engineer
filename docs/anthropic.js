@@ -1,9 +1,24 @@
 import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.32.1";
 import { tools, runTool } from "./tools.js";
 
-const MODEL = "claude-sonnet-4-6";
-const PRICE_INPUT_PER_M = 3;
-const PRICE_OUTPUT_PER_M = 15;
+const MODELS = {
+  sonnet: { id: "claude-sonnet-4-6", input: 3, output: 15, cache_write: 3.75, cache_read: 0.30 },
+  haiku:  { id: "claude-haiku-4-5",  input: 1, output: 5,  cache_write: 1.25, cache_read: 0.10 }
+};
+
+// Memory writes, greetings, and meta questions go to Haiku. Mixing-analysis
+// questions go to Sonnet. Locked per send() so the multi-turn tool loop
+// stays on one model.
+function pickModel(userMessage) {
+  if (!userMessage) return MODELS.sonnet;
+  const m = userMessage.toLowerCase().trim();
+  if (/^(remember|save|store|note that|forget|recall)\b/.test(m)) return MODELS.haiku;
+  if (/^(hi|hello|hey|yo|sup)\b/.test(m)) return MODELS.haiku;
+  if (/^(thanks|thank you|thx|ty|cool|nice|got it|gotcha)\b/.test(m)) return MODELS.haiku;
+  if (/^(ok|okay|sounds good|sure)$/.test(m)) return MODELS.haiku;
+  if (/^(help|what can you do|what tools|what do you do|how do you work)\b/.test(m)) return MODELS.haiku;
+  return MODELS.sonnet;
+}
 
 export const SYSTEM_PROMPT = `Expert electronic music mixing engineer in Ableton Live via M4L. Mixing expertise is assumed. You are an INVESTIGATOR, not a confirmer. Below: the data this device provides and the rules for reading it.
 
@@ -95,7 +110,7 @@ If the user message starts with /debug or is exactly "RUN FULL DIAGNOSTIC", swit
 export class ClaudeSession {
   constructor({ apiKey, model, onText, onToolStart, onDone, onError, onUsage }) {
     this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-    this.model = model || MODEL;
+    this.modelOverride = model || null;
     this.messages = [];
     this.onText = onText;
     this.onToolStart = onToolStart;
@@ -104,9 +119,16 @@ export class ClaudeSession {
     this.onUsage = onUsage;
     this.totalInputTokens = 0;
     this.totalOutputTokens = 0;
+    this.totalCacheWriteTokens = 0;
+    this.totalCacheReadTokens = 0;
+    this.totalCostUsd = 0;
+    this.currentTurnModel = MODELS.sonnet;
   }
 
   async send(userMessage) {
+    this.currentTurnModel = this.modelOverride
+      ? Object.values(MODELS).find(m => m.id === this.modelOverride) || MODELS.sonnet
+      : pickModel(userMessage);
     this.messages.push({ role: "user", content: userMessage });
     try {
       await this._runLoop();
@@ -116,13 +138,19 @@ export class ClaudeSession {
   }
 
   async _streamWithRetry(maxRetries = 4) {
+    // Cache the SYSTEM_PROMPT and tool definitions: subsequent calls within
+    // ~5 min pay ~10% of the input price for those tokens. The cache covers
+    // everything up to and including the block marked with cache_control.
+    const cachedTools = tools.map((t, i) =>
+      i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+    );
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await this.client.messages.stream({
-          model: this.model,
+          model: this.currentTurnModel.id,
           max_tokens: 2048,
-          system: SYSTEM_PROMPT,
-          tools,
+          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+          tools: cachedTools,
           messages: this.messages
         });
       } catch (e) {
@@ -143,10 +171,23 @@ export class ClaudeSession {
       this.messages.push({ role: "assistant", content: final.content });
 
       if (final.usage) {
-        this.totalInputTokens += final.usage.input_tokens || 0;
-        this.totalOutputTokens += final.usage.output_tokens || 0;
-        const cost = (this.totalInputTokens * PRICE_INPUT_PER_M + this.totalOutputTokens * PRICE_OUTPUT_PER_M) / 1e6;
-        this.onUsage?.({ input: this.totalInputTokens, output: this.totalOutputTokens, cost_usd: cost });
+        const p = this.currentTurnModel;
+        const inp = final.usage.input_tokens || 0;
+        const out = final.usage.output_tokens || 0;
+        const cw  = final.usage.cache_creation_input_tokens || 0;
+        const cr  = final.usage.cache_read_input_tokens || 0;
+        this.totalInputTokens += inp;
+        this.totalOutputTokens += out;
+        this.totalCacheWriteTokens += cw;
+        this.totalCacheReadTokens += cr;
+        this.totalCostUsd += (inp * p.input + out * p.output + cw * p.cache_write + cr * p.cache_read) / 1e6;
+        this.onUsage?.({
+          input: this.totalInputTokens,
+          output: this.totalOutputTokens,
+          cache_write: this.totalCacheWriteTokens,
+          cache_read: this.totalCacheReadTokens,
+          cost_usd: this.totalCostUsd
+        });
       }
 
       if (final.stop_reason !== "tool_use") {
