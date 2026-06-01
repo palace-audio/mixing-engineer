@@ -6,6 +6,9 @@ body {
   font-size: 11px;
   background: #1a1a1a;
   color: #e0e0e0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 #app { display: flex; flex-direction: column; position: relative; }
@@ -186,35 +189,38 @@ body {
 
 #input-row {
   padding: 10px;
-  background: #2a2a2a;
-  border-top: 1px solid #3a3a3a;
+  background: #161616;
+  border-top: 1px solid #232323;
   display: flex;
   gap: 8px;
 }
 
 #input {
   flex: 1;
-  background: #1e1e1e;
-  color: #e0e0e0;
-  border: 1px solid #3a3a3a;
+  background: #0f0f0f;
+  color: #e6e6e6;
+  border: 1px solid #2a2a2a;
   border-radius: 4px;
-  padding: 6px 8px;
+  padding: 7px 10px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   resize: none;
 }
-#input:focus { outline: none; border-color: #5a5a5a; }
+#input:focus { outline: none; border-color: #d4a574; }
 
 #send {
-  background: #4a6fa5;
-  color: white;
+  background: #d4a574;
+  color: #0a0a0a;
   border: none;
   border-radius: 4px;
-  padding: 0 16px;
+  padding: 0 14px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 36px;
+  line-height: 1;
 }
-#send:hover { background: #5a7fb5; }
+#send:hover { background: #e5b787; }
 #send:disabled { background: #3a3a3a; color: #666; cursor: not-allowed; }
 
 #settings-overlay {
