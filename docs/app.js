@@ -35,7 +35,11 @@ function applyMetrics() {
       : metricsTokens + " tok";
   }
   if (window.max && typeof window.max.outlet === "function") {
-    window.max.outlet("metrics", metricsStatus, metricsCost.toFixed(4), metricsTokens);
+    const costStr = "$" + metricsCost.toFixed(2);
+    const tokStr = metricsTokens >= 1000
+      ? (metricsTokens / 1000).toFixed(1) + "k"
+      : String(metricsTokens);
+    window.max.outlet("metrics", metricsStatus, costStr, tokStr);
   }
 }
 
