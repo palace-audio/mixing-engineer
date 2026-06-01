@@ -6,13 +6,13 @@ It's not a replacement for ears. It's a second opinion you can ask things like "
 
 ## Rationale and Philosophy
 
-I believe that mixing music is a skill (objective) and an art (subjective) at the same time. In the countless hours that I taught myself producing, I realized that achieving the sound I want requires **applying the objective to the subjective** - especially in dance music. 
+I believe that mixing music is a skill (objective) and an art (subjective) at the same time. In the countless hours that I taught myself producing, I realized that achieving the sound I wanted required **applying the objective to the subjective** - especially in dance music. 
 
 I navigated the producer journey with every tool available to me: video tutorials, webpages & blogs, mentors & established producers, and finally, artificial intelligence. In my experience, information is abundant but the more detailed my questions were, the less I was able to benefit from any one source.
 
-I am proud to say that I can take care of myself now :) but I also realize that many producers have the mindset of an artist, but not necesarilly the skillset - I can say confidently because I used to be that way. At a time when music production is so accessible, I was unable to find a single reliable technique to teach myself production. This is why I built a tool that bridges the gap between skill and art! 
+I am proud to say that I can take care of myself now :) but I also realize that many producers have the mindset of an artist without the skillset. I say this confidently because I used to be one of them. At a time when music production is so accessible, I was unable to find a single reliable technique to teach myself production. This is why I built a tool that **bridges the gap between skill and art.**
 
-I am most proud of this because it embodies how I view  artificial intelligence as an engineering student, that it has immense potential to help humans when used to compliment rather than clash with our interests. The beauty of my product is that it is both an **educational tool** that newer producers can use to understand mixing without knowing all the jargon and such, but also an **advanced mixing analysis tool** that can be asked a deep question to provide an even deeper result. I worked with trusted producers and mixing engineers to ensure that it has access to all the information a professional would need to make decisions.
+I am most proud of this because it embodies how I view artificial intelligence: that it has immense potential to help humans when used to complement rather than clash with our interests. The beauty of my product is that it is both an **educational tool** that understands newer producers even if they don't have the words for what they hear, but also an **advanced mixing analysis tool** that rewards a pro's nuanced questions with deep analysis. I worked with trusted producers and mixing engineers to ensure that it has access to all the information a professional would need to make decisions.
 
 I purposefully limited my tool to be purely advisory and did not give it any editing capabilities. My goal is to provide a platform for thought-provoking questions about mixing without taking away from the creative experience. I hope I was able to provide this!
 
@@ -22,7 +22,7 @@ I purposefully limited my tool to be purely advisory and did not give it any edi
 
 Open the chat panel and ask in plain language. There's no syntax to learn — talk to it the way you'd talk to another producer. The device picks the right tools and answers from actual measurements.
 
-The chat keeps full conversation history within a session, so you can ask follow-up questions, push back on a verdict, or move between tracks freely. You can also ask general mixing questions that don't require a measurement — the device draws on standard mixing knowledge for those.
+The chat keeps full conversation history within a session, so you can ask follow-up questions, push back on an earlier verdict, or move between tracks freely. You can also ask general mixing questions that don't require a measurement — the device draws on standard mixing knowledge for those.
 
 ## Capabilities
 
