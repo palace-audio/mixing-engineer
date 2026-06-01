@@ -24,7 +24,7 @@ Open the chat panel and ask in plain language. There's no syntax to learn — ta
 
 The chat keeps full conversation history within a session, so you can ask follow-up questions, push back on an earlier verdict, or move between tracks freely. You can also ask general mixing questions that don't require a measurement — the device draws on standard mixing knowledge for those.
 
-## Capabilities
+## Functionality
 
 **Listen to a section.** Captures audio between any two locators (or ten seconds from the playhead) and reports frequency balance, peak and RMS levels, integrated LUFS, true peak, dynamic range, stereo correlation, and a per-second spectrum and energy timeline.
 
