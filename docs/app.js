@@ -7,12 +7,37 @@ const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const statusEl = document.getElementById("status");
-const usageEl = document.getElementById("usage");
+const statusTextEl = document.getElementById("status-text");
+const costEl = document.getElementById("cost");
+const tokEl = document.getElementById("tok");
 
 let session = null;
 let currentAssistantEl = null;
 let currentAssistantText = "";
 let thinkingEl = null;
+
+let metricsStatus = "Offline";
+let metricsCost = 0;
+let metricsTokens = 0;
+
+function applyMetrics() {
+  if (statusEl) {
+    statusEl.classList.remove("connected", "disconnected", "thinking");
+    if (metricsStatus === "Offline") statusEl.classList.add("disconnected");
+    else if (metricsStatus === "Thinking") statusEl.classList.add("thinking");
+    else statusEl.classList.add("connected");
+  }
+  if (statusTextEl) statusTextEl.textContent = metricsStatus;
+  if (costEl) costEl.textContent = "$" + metricsCost.toFixed(3);
+  if (tokEl) {
+    tokEl.textContent = metricsTokens >= 1000
+      ? (metricsTokens / 1000).toFixed(1) + "k tok"
+      : metricsTokens + " tok";
+  }
+  if (window.max && typeof window.max.outlet === "function") {
+    window.max.outlet("metrics", metricsStatus, metricsCost.toFixed(4), metricsTokens);
+  }
+}
 
 function showThinking() {
   if (thinkingEl) return;
@@ -21,16 +46,22 @@ function showThinking() {
   thinkingEl.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>';
   messagesEl.appendChild(thinkingEl);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+  metricsStatus = "Thinking";
+  applyMetrics();
 }
 
 function hideThinking() {
   if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+  if (metricsStatus === "Thinking") {
+    metricsStatus = "Ready";
+    applyMetrics();
+  }
 }
 
 function setStatus(connected) {
-  statusEl.className = connected ? "connected" : "disconnected";
-  statusEl.title = connected ? "ready" : "no API key";
   sendBtn.disabled = !connected;
+  metricsStatus = connected ? "Ready" : "Offline";
+  applyMetrics();
 }
 
 function escapeHtml(s) {
@@ -142,8 +173,9 @@ function initSession(apiKey) {
       sendBtn.disabled = false;
     },
     onUsage: (u) => {
-      usageEl.textContent = `$${u.cost_usd.toFixed(3)} (${u.input}+${u.output} tok)`;
-      usageEl.title = `session: ${u.input} input + ${u.output} output tokens = $${u.cost_usd.toFixed(4)}`;
+      metricsCost = u.cost_usd || 0;
+      metricsTokens = (u.input || 0) + (u.output || 0);
+      applyMetrics();
     }
   });
   setStatus(true);
