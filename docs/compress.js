@@ -45,9 +45,12 @@ function dropEmpty(o) {
 }
 
 // Spectrum: [{hz, m, sm}, ...] → {hz:[...], m:[...], sm:[...]}
-// Saves ~50% on bytes vs the per-entry object form.
+// Idempotent: if Max already emits the parallel-array form (current default),
+// pass through unchanged. The array-of-objects form was the legacy shape.
 function compactSpectrum(spectrum) {
-  if (!Array.isArray(spectrum) || spectrum.length === 0) return spectrum;
+  if (!spectrum) return spectrum;
+  if (!Array.isArray(spectrum)) return spectrum; // already parallel-array form
+  if (spectrum.length === 0) return spectrum;
   const hz = [], m = [], sm = [];
   for (const b of spectrum) {
     hz.push(b.hz);
@@ -58,17 +61,22 @@ function compactSpectrum(spectrum) {
 }
 
 // Master time_series: [{t, l, r}, ...] → {t0, dt, l:[...], r:[...]}
-// Assumes uniform 100ms cadence by Max-side design (snapshot metro).
+// Idempotent: if already in parallel-array form, pass through.
 function compactTimeSeriesObjects(ts) {
-  if (!Array.isArray(ts) || ts.length === 0) return ts;
+  if (!ts) return ts;
+  if (!Array.isArray(ts)) return ts; // already parallel-array form
+  if (ts.length === 0) return ts;
   const l = [], r = [];
   for (const f of ts) { l.push(f.l); r.push(f.r); }
   return { t0: ts[0].t, dt: 0.1, l, r };
 }
 
 // Focus time_series: [[t, l, r], ...] → {t0, dt, l:[...], r:[...]}
+// Idempotent: if already in parallel-array form, pass through.
 function compactTimeSeriesTuples(ts) {
-  if (!Array.isArray(ts) || ts.length === 0) return ts;
+  if (!ts) return ts;
+  if (!Array.isArray(ts)) return ts; // already parallel-array form
+  if (ts.length === 0) return ts;
   const l = [], r = [];
   for (const f of ts) { l.push(f[1]); r.push(f[2]); }
   return { t0: ts[0][0], dt: 0.1, l, r };

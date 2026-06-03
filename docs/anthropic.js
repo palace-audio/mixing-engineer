@@ -158,6 +158,13 @@ function prepareCachedMessages(messages, memoryMessageIndex) {
 // auth failed, etc.) and continuing to schedule retries wastes attempts.
 const MAX_COMPRESSION_BACKLOG = 5;
 
+// Only these tool results get decayed to findings on subsequent turns.
+// Settings queries (get_device_params, list_tracks, etc.) are 1-2KB each
+// and Claude needs to be able to re-verify current state — decaying them
+// makes Claude double down on stale findings when challenged. Only
+// analyze_section produces multi-KB payloads worth compressing away.
+const DECAYABLE_TOOLS = new Set(["analyze_section"]);
+
 export class ClaudeSession {
   constructor({ apiKey, model, onText, onToolStart, onDone, onError, onUsage }) {
     this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -233,12 +240,16 @@ export class ClaudeSession {
       const summary = result.findings
         ? `[prior turn — findings extracted from full tool output]\n${result.findings}`
         : `[prior turn — no extractable findings]`;
-      for (const idx of entry.toolResultIndices) {
-        if (idx >= this.messages.length) continue;
-        const msg = this.messages[idx];
+      for (const ref of entry.toolResultRefs) {
+        if (ref.msgIdx >= this.messages.length) continue;
+        const msg = this.messages[ref.msgIdx];
         if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+        const decaySet = new Set(ref.decayableIds);
+        if (decaySet.size === 0) continue;
         for (const block of msg.content) {
-          if (block.type === "tool_result") block.content = summary;
+          if (block.type === "tool_result" && decaySet.has(block.tool_use_id)) {
+            block.content = summary;
+          }
         }
       }
       this.compressionPending = this.compressionPending.filter(e => e.id !== entry.id);
@@ -306,11 +317,11 @@ export class ClaudeSession {
 
       if (final.stop_reason !== "tool_use") {
         this.onDone?.();
-        // Schedule background Haiku extraction so the raw tool_result payloads
-        // from this turn can be replaced with a short findings summary on
-        // subsequent turns. Fire-and-forget: success mutates this.messages
-        // directly, transient failures stay in the backlog for next-turn retry.
-        if (this.currentTurnToolResultIndices.length > 0 && !this.compressionPaused) {
+        // Schedule background Haiku extraction only if at least one decayable
+        // tool ran this turn. Settings queries don't benefit from decay and
+        // shouldn't trigger a Haiku call.
+        const hasDecayable = this.currentTurnToolResultIndices.some(r => r.decayableIds.length > 0);
+        if (hasDecayable && !this.compressionPaused) {
           const assistantText = final.content
             .filter(b => b.type === "text")
             .map(b => b.text || "")
@@ -320,7 +331,7 @@ export class ClaudeSession {
             const entry = {
               id: this.nextTaskId++,
               assistantText,
-              toolResultIndices: [...this.currentTurnToolResultIndices],
+              toolResultRefs: [...this.currentTurnToolResultIndices],
               attempts: 0
             };
             this.compressionPending.push(entry);
@@ -331,12 +342,14 @@ export class ClaudeSession {
       }
 
       const toolResults = [];
+      const decayableIds = [];
       let memoryCalledThisTurn = false;
       for (const block of final.content) {
         if (block.type === "tool_use") {
           this.onToolStart?.(block.name, block.input);
           const result = await runTool(block.name, block.input);
           if (block.name === "get_memory") memoryCalledThisTurn = true;
+          if (DECAYABLE_TOOLS.has(block.name)) decayableIds.push(block.id);
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -345,7 +358,10 @@ export class ClaudeSession {
         }
       }
       this.messages.push({ role: "user", content: toolResults });
-      this.currentTurnToolResultIndices.push(this.messages.length - 1);
+      this.currentTurnToolResultIndices.push({
+        msgIdx: this.messages.length - 1,
+        decayableIds
+      });
       // Mark the message containing get_memory's result as the cache
       // breakpoint for memory — semi-static for the rest of the session.
       if (memoryCalledThisTurn) this.memoryMessageIndex = this.messages.length - 1;
