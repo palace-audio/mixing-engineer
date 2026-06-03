@@ -219,19 +219,29 @@ export async function runTool(name, input) {
         const startIdx = resolvedStart ? sorted.findIndex(l => l.name === resolvedStart) : -1;
         if (startIdx === -1) return { error: `locator '${input.start_locator}' not found. Available: ${locNames.join(", ")}` };
         startLoc = sorted[startIdx];
+        // If seconds is given, end_locator is optional — duration drives the cap.
+        const secondsExplicit = input.seconds != null;
         if (endName) {
           const resolvedEnd = fuzzyResolve(input.end_locator, locNames);
           endLoc = resolvedEnd ? sorted.find(l => l.name === resolvedEnd) : null;
           if (!endLoc) return { error: `end_locator '${input.end_locator}' not found. Available: ${locNames.join(", ")}` };
           if (endLoc.time_beat <= startLoc.time_beat) return { error: `end_locator at or before start_locator` };
-        } else {
+        } else if (!secondsExplicit) {
           endLoc = sorted[startIdx + 1];
-          if (!endLoc) return { error: `no locator after '${input.start_locator}' — specify end_locator explicitly` };
+          if (!endLoc) return { error: `no locator after '${input.start_locator}' — specify end_locator or seconds explicitly` };
         }
         const overview = await query("get_session_overview");
         const tempo = overview?.tempo;
         if (!tempo) return { error: "could not read tempo" };
-        sec = (endLoc.time_beat - startLoc.time_beat) * 60 / tempo;
+        const locatorSpan = endLoc ? (endLoc.time_beat - startLoc.time_beat) * 60 / tempo : Infinity;
+        if (secondsExplicit) {
+          // User explicitly asked for a fixed duration starting at the locator.
+          // Honor it, but cap at the locator span if both were given so we don't
+          // overrun, and cap at 30s as a safety ceiling.
+          sec = Math.max(2, Math.min(30, Math.min(locatorSpan, input.seconds)));
+        } else {
+          sec = locatorSpan;
+        }
       }
 
       const transport = await query("get_transport_state");
