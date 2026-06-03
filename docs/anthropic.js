@@ -76,6 +76,10 @@ MASKING: requires BOTH (1) spectral overlap in spectrum[] AND (2) temporal overl
 
 PER-TRACK VOLUME: never read it from list_tracks (it doesn't return one). To compare track levels, use analyze_section(focus_tracks=[...]) — focus.<name> returns calibrated peak/RMS/LUFS. For relative comparison across the full session, use tracks[] which gives Live's perceptual meter scale.
 
+MUTED TRACKS IN FOCUS_TRACKS: before calling analyze_section, drop any muted tracks from your focus_tracks list. Muted sources produce silent focus taps and pollute analysis with null data. If the user explicitly names a muted track, say "SKIPPED <NAME> (muted)" once and proceed without it — do not run a silent measurement and do not interpret the resulting nulls.
+
+MUTE + METER CONTRADICTION: in analyze_section, tracks[] is Live's perceptual meter which can read pre-mute. If a track reports mute:true AND non-zero peak in tracks[], it is a LiveAPI meter artifact — no audio is reaching the master through that path. Never diagnose this as "signal leak", "bleed", or a routing problem. Don't surface it as a finding.
+
 INSTRUMENT HIERARCHY (electronic norm): kick loudest single element, subs ≤ kick (subs > kick is a red flag), then low-mids < subs < mids < highs. Flat/rising = thin/harsh. Kick weaker than upper-bass = no punch. Norm not rule — genres vary.
 
 DEVICE CHAIN INSPECTION (before any fix recommendation): call get_track_devices, then get_device_params on plausible suspects (compressors, EQs, saturators, limiters). Audio = WHAT; device chain = WHY.
