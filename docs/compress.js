@@ -60,37 +60,26 @@ function compactSpectrum(spectrum) {
   return { hz, m, sm };
 }
 
-// Master time_series: [{t, l, r}, ...] → {t0, dt, l:[...], r:[...]}
-// Idempotent: if already in parallel-array form, pass through.
-function compactTimeSeriesObjects(ts) {
-  if (!ts) return ts;
-  if (!Array.isArray(ts)) return ts; // already parallel-array form
-  if (ts.length === 0) return ts;
-  const l = [], r = [];
-  for (const f of ts) { l.push(f.l); r.push(f.r); }
-  return { t0: ts[0].t, dt: 0.1, l, r };
-}
+// Master / focus time_series both come from Max as {t:[...], l:[...], r:[...]}
+// — variable-rate parallel arrays (post-RDP). Pass through unchanged. The
+// legacy reshape paths are kept as no-ops for any older capture data.
+function compactTimeSeriesObjects(ts) { return ts; }
+function compactTimeSeriesTuples(ts) { return ts; }
 
-// Focus time_series: [[t, l, r], ...] → {t0, dt, l:[...], r:[...]}
-// Idempotent: if already in parallel-array form, pass through.
-function compactTimeSeriesTuples(ts) {
-  if (!ts) return ts;
-  if (!Array.isArray(ts)) return ts; // already parallel-array form
-  if (ts.length === 0) return ts;
-  const l = [], r = [];
-  for (const f of ts) { l.push(f[1]); r.push(f[2]); }
-  return { t0: ts[0][0], dt: 0.1, l, r };
-}
-
-// peak_left/peak_right/rms_left/rms_right → peak:[L,R], rms:[L,R]
+// Master: peak_left/right/rms_left/right → peak:[L,R], rms:[L,R] (peak is a real
+// time-domain sample peak). Focus (isFocus): there is NO true peak — both numbers
+// come from the FFT-frame RMS, so they're labeled rms_max:[L,R] (loudest frame)
+// and rms_avg:[L,R] (mean frame) to avoid implying a sample peak.
 // Mutates the passed object in place. Drops sample_count (noise for Claude).
-function compactPackPair(obj) {
+function compactPackPair(obj, isFocus) {
   const pl = obj.peak_left, pr = obj.peak_right, rl = obj.rms_left, rr = obj.rms_right;
+  const maxKey = isFocus ? "rms_max" : "peak";
+  const avgKey = isFocus ? "rms_avg" : "rms";
   if (pl || pr) {
-    obj.peak = [pl ? r1(pl.max_db) : null, pr ? r1(pr.max_db) : null];
+    obj[maxKey] = [pl ? r1(pl.max_db) : null, pr ? r1(pr.max_db) : null];
   }
   if (rl || rr) {
-    obj.rms = [rl ? r1(rl.mean_db) : null, rr ? r1(rr.mean_db) : null];
+    obj[avgKey] = [rl ? r1(rl.mean_db) : null, rr ? r1(rr.mean_db) : null];
   }
   delete obj.peak_left; delete obj.peak_right;
   delete obj.rms_left;  delete obj.rms_right;
@@ -103,10 +92,11 @@ function compactPackPair(obj) {
 function compactLufs(lufs) {
   if (!lufs) return lufs;
   const out = {};
-  if (lufs.integrated_lufs != null) out.integrated_lufs = lufs.integrated_lufs;
-  if (lufs.momentary_lufs != null)  out.momentary_lufs  = lufs.momentary_lufs;
-  if (lufs.short_term_lufs != null) out.short_term_lufs = lufs.short_term_lufs;
-  if (lufs.lra_lu != null)          out.lra_lu          = lufs.lra_lu;
+  if (lufs.integrated_lufs != null)    out.integrated_lufs    = lufs.integrated_lufs;
+  if (lufs.momentary_max_lufs != null) out.momentary_max_lufs = lufs.momentary_max_lufs;
+  if (lufs.short_term_max_lufs != null) out.short_term_max_lufs = lufs.short_term_max_lufs;
+  if (lufs.lra_lu != null)             out.lra_lu             = lufs.lra_lu;
+  if (lufs.sr_note != null)            out.sr_note            = lufs.sr_note;
   return out;
 }
 
@@ -131,13 +121,18 @@ function compressAnalyzeSection(r) {
   if (r.focus) {
     const focusOut = {};
     // Drop diagnostic entirely — it's per-voice debug, not mixing data.
+    // Expose diagnostic so AI can report what actually happened inside
+    // each voice (peak counts, spec frames) — critical for focus tap debugging.
+    if (r.focus.diagnostic) out.focus_diagnostic = r.focus.diagnostic;
     for (const key of Object.keys(r.focus)) {
       if (key === "diagnostic") continue;
       const v = { ...r.focus[key] };
       if (v.spectrum) v.spectrum = compactSpectrum(v.spectrum);
       if (v.time_series) v.time_series = compactTimeSeriesTuples(v.time_series);
-      compactPackPair(v);
+      compactPackPair(v, true);
       delete v.frames_averaged;
+      // Keep transients only when non-empty bands exist.
+      if (v.transients && Object.keys(v.transients).length === 0) delete v.transients;
       dropEmpty(v);
       focusOut[key] = v;
     }
@@ -148,8 +143,57 @@ function compressAnalyzeSection(r) {
     out.focus_routing = r.focus_routing.map(fr => {
       const o = { track: fr.track, voice: fr.voice };
       if (fr.ok === false || fr.error) o.failed = fr.error || true;
+      // Detect captured-but-silent voices: routing succeeded structurally but
+      // the tap recorded only noise floor (-120 dB) throughout. Distinct from
+      // routing failure — separates "tap broke" from "track was muted /
+      // sidechained dead / not playing / wrong source picked".
+      if (!o.failed && out.focus && out.focus[fr.track]) {
+        const v = out.focus[fr.track];
+        if (v.rms_max && v.rms_max[0] != null && v.rms_max[1] != null &&
+            v.rms_max[0] <= -119 && v.rms_max[1] <= -119) {
+          o.silent = true;
+        }
+      }
+      // Routing identifier/channel diagnostics are dev-only scaffolding — they
+      // shipped to the model on every focus query for no decision value. Keep
+      // only track/voice/failed/silent (the states the model actually reasons on).
       return o;
     });
+  }
+
+  if (r.focus_group_chains) {
+    const fgc = {};
+    for (const [trackName, gc] of Object.entries(r.focus_group_chains)) {
+      fgc[trackName] = {
+        parent: gc.parent,
+        devices: (gc.devices || []).map(d => {
+          const o = { i: d.index, name: d.name, class: d.class_name };
+          const { native, class_inferred } = classifyDevice(d.class_name, d.name);
+          if (!native) o.native = false;
+          o.class_inferred = class_inferred;
+          if (d.is_active === false) o.off = true;
+          if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
+          // EQ filter corners inline → AI reasons about what the chain filters
+          // without a get_device_params round-trip.
+          if (d.eq_bands_active) o.eq = d.eq_bands_active;
+          return o;
+        })
+      };
+    }
+    out.focus_group_chains = fgc;
+  }
+
+  if (r.pairwise_masking) {
+    // Emit only pairs with ACTUAL masking (≥1 masked band). Complementing,
+    // non-overlapping (cooccur-gated), and all-clear pairs are dropped — absence
+    // of a pair means no significant masking between those two elements. Pairwise
+    // is O(N²) so this is the single biggest cost cut at high voice counts.
+    const pm = {};
+    for (const k of Object.keys(r.pairwise_masking)) {
+      const p = r.pairwise_masking[k];
+      if (p && p.masked_bands && p.masked_bands.length > 0) pm[k] = p;
+    }
+    if (Object.keys(pm).length > 0) out.pairwise_masking = pm;
   }
 
   if (r.reference) {
@@ -202,9 +246,98 @@ function compressListTracks(r) {
     if (t.playing_slot_index != null && t.playing_slot_index >= 0) {
       o.playing_slot = t.playing_slot_index;
     }
+    // CPU load contribution per track (Live's performance_impact). Only surface
+    // when meaningfully non-zero — most tracks idle near 0 and clutter the list.
+    if (t.performance_impact != null && t.performance_impact > 0.01) {
+      o.cpu = Math.round(t.performance_impact * 100) / 100;
+    }
+    // clips only appears when the caller asked for session-view context via
+    // with_clips. Already pre-compressed Max-side to {s, n?, b} per non-empty slot.
+    if (t.clips && t.clips.length) o.clips = t.clips;
     return o;
   });
   return out;
+}
+
+// Native Ableton stock devices identified by class_name. Params have stable,
+// documented semantics and the AI can reason about them.
+const NATIVE_DEVICE_CLASSES = {
+  Eq8: "eq", EqThree: "eq", ChannelEq: "eq",
+  Compressor2: "comp", GlueCompressor: "comp", MultibandDynamics: "comp",
+  Limiter: "limiter", Limiter2: "limiter",
+  Gate: "gate",
+  AutoFilter: "filter",
+  AutoPan: "tremolo", "Phaser-Flanger": "modulation",
+  Saturator: "saturation", Overdrive: "saturation",
+  DrumBuss: "saturation", Roar: "saturation", Erosion: "saturation",
+  Vinyl: "saturation",
+  Reverb: "reverb", Reverb2: "reverb", HybridReverb: "reverb",
+  Echo: "delay", FilterDelay: "delay", Delay: "delay",
+  Utility: "utility",
+  AudioEffectGroupDevice: "rack", InstrumentGroupDevice: "rack"
+};
+
+// Stock M4L devices that ship with Live Suite. Their class_name is the generic
+// MxDeviceAudioEffect / MxDeviceInstrument / MxDeviceMidiEffect wrapper, NOT a
+// unique class — so they have to be identified by device NAME instead. Pedal,
+// Amp, Cabinet were rewritten as M4L in recent Live versions; LFO, Envelope
+// Follower, Shaper, Spectrum, Tuner ship as M4L too.
+const NATIVE_M4L_NAMES = {
+  "Amp": "saturation",
+  "Cabinet": "saturation",
+  "Pedal": "saturation",
+  "LFO": "modulation",
+  "Envelope Follower": "modulation",
+  "Shaper": "modulation",
+  "Spectrum": "analyzer",
+  "Tuner": "analyzer",
+  "Microtuner": "utility",
+  "Vocoder": "modulation",
+  "Note Echo": "midi_effect",
+  "Pitch": "midi_effect",
+  "Velocity": "midi_effect",
+  "Random": "midi_effect",
+  "Scale": "midi_effect",
+  "Note Length": "midi_effect",
+  "Chord": "midi_effect"
+};
+
+// Infer the broad class (eq/comp/limiter/...) of a device. For native devices
+// the class_name is authoritative. For non-native (PluginDevice / MxDevice*),
+// scan the user-facing name for category keywords. Returns "unknown" only when
+// neither path matches — the device exists but its class can't be inferred.
+function classifyDevice(className, deviceName) {
+  if (className && NATIVE_DEVICE_CLASSES[className]) {
+    return { native: true, class_inferred: NATIVE_DEVICE_CLASSES[className] };
+  }
+  // Stock M4L devices: only match the name table if class_name is actually a
+  // M4L wrapper class — otherwise a third-party VST coincidentally named "Amp"
+  // would get classified as native.
+  const isM4L = className && className.startsWith("MxDevice");
+  if (isM4L && deviceName && NATIVE_M4L_NAMES[deviceName]) {
+    return { native: true, class_inferred: NATIVE_M4L_NAMES[deviceName] };
+  }
+  const n = String(deviceName || "").toLowerCase();
+  const pairs = [
+    ["ducker", "sidechain_comp"], ["sidechain", "sidechain_comp"],
+    ["maximizer", "limiter"], ["limiter", "limiter"],
+    ["clipper", "clipper"],
+    ["multiband", "multiband_comp"],
+    ["compressor", "comp"], [" comp", "comp"],
+    ["pro-q", "eq"], ["equalizer", "eq"], [" eq", "eq"],
+    ["reverb", "reverb"], ["verb", "reverb"],
+    ["echo", "delay"], ["delay", "delay"],
+    ["saturator", "saturation"], ["saturation", "saturation"],
+    ["distortion", "saturation"], ["overdrive", "saturation"], ["fuzz", "saturation"],
+    ["chorus", "modulation"], ["flanger", "modulation"], ["phaser", "modulation"],
+    ["gate", "gate"],
+    ["utility", "utility"], ["analyzer", "analyzer"], ["meter", "analyzer"],
+    ["filter", "filter"]
+  ];
+  for (const [needle, cls] of pairs) {
+    if (n.indexOf(needle) !== -1) return { native: false, class_inferred: cls };
+  }
+  return { native: false, class_inferred: "unknown" };
 }
 
 function compressTrackDevices(r) {
@@ -212,10 +345,16 @@ function compressTrackDevices(r) {
   return {
     devices: r.devices.map(d => {
       const o = { i: d.index, name: d.name, class: d.class_name };
+      const { native, class_inferred } = classifyDevice(d.class_name, d.name);
+      // Absence of `native` means native (default — saves tokens). Emit only
+      // when third-party so the AI sees an explicit opaque-params signal.
+      if (!native) o.native = false;
+      o.class_inferred = class_inferred;
       if (d.chain_path) o.chain_path = d.chain_path;
       if (d.is_active === false) o.off = true;
       if (d.can_have_chains) o.rack = true;
       if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
+      if (d.eq_bands_active) o.eq = d.eq_bands_active;
       return o;
     })
   };
@@ -224,7 +363,11 @@ function compressTrackDevices(r) {
 function compressDeviceParams(r) {
   if (!r.params) return r;
   const out = { name: r.name, class: r.class_name };
-  out.params = r.params.map(p => {
+  // EQ Eight: the 8×~5 per-band params are huge and fully summarized by
+  // eq_bands_active — drop them, keep only globals (output gain, mode, scale).
+  // Band param names start with a digit ("1 Frequency A", "2 Filter On A", …).
+  const src = r.eq_bands_active ? r.params.filter(p => !/^\d+\s/.test(p.name)) : r.params;
+  out.params = src.map(p => {
     const o = { i: p.index, name: p.name, val: p.display_value };
     // Drop raw 0..1 value (shadowed by display_value), drop min/max when normalized.
     if (p.min != null && p.max != null && (p.min !== 0 || p.max !== 1)) {
@@ -245,8 +388,8 @@ function compressSessionOverview(r) {
   const out = {};
   for (const k of Object.keys(r)) {
     const v = r[k];
-    // Drop falsy defaults (false booleans, 0 counts that mean "none", nulls).
     if (v === null || v === undefined || v === false) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
     out[k] = v;
   }
   return out;

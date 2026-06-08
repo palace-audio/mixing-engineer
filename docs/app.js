@@ -133,6 +133,62 @@ function addMessage(role, text) {
   return el;
 }
 
+// Tracks an open picker so a free-form user message (typed instead of clicked)
+// can resolve the pending tool_use cleanly. Without this, typing past a picker
+// leaves the tool_use dangling and the Anthropic API rejects the next turn
+// with "tool_use ids were found without tool_result blocks immediately after".
+let pendingPickerResolver = null;
+
+// Render the ask_user_choice picker inline in the message stream. Returns a
+// Promise that resolves with the selected label when the user clicks OR with
+// the typed text when the user bypasses the buttons by sending a regular
+// message. Buttons disable on resolution so the same picker can't be answered
+// twice.
+function renderPicker(question, options) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant picker";
+    const q = document.createElement("div");
+    q.className = "picker-question";
+    q.textContent = question;
+    wrap.appendChild(q);
+    const btnRow = document.createElement("div");
+    btnRow.className = "picker-options";
+    let resolved = false;
+    const finish = (value, viaClick) => {
+      if (resolved) return;
+      resolved = true;
+      pendingPickerResolver = null;
+      Array.from(btnRow.children).forEach(b => {
+        b.disabled = true;
+        if (!viaClick || b.dataset.label !== value) b.classList.add("picker-unchosen");
+      });
+      if (viaClick) {
+        const chosenBtn = Array.from(btnRow.children).find(b => b.dataset.label === value);
+        if (chosenBtn) { chosenBtn.classList.remove("picker-unchosen"); chosenBtn.classList.add("picker-chosen"); }
+        addMessage("user", value);
+      }
+      resolve(value);
+    };
+    options.forEach((opt) => {
+      const btn = document.createElement("button");
+      btn.className = "picker-btn";
+      btn.type = "button";
+      const label = (opt && opt.label) || "";
+      btn.dataset.label = label;
+      const desc = opt && opt.description;
+      btn.innerHTML = `<span class="picker-label">${label}</span>` + (desc ? `<span class="picker-desc">${desc}</span>` : "");
+      btn.addEventListener("click", () => finish(label, true));
+      btnRow.appendChild(btn);
+    });
+    wrap.appendChild(btnRow);
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Expose a resolver the send() flow can call when the user types past the picker.
+    pendingPickerResolver = (typedText) => finish(typedText, false);
+  });
+}
+
 function clearChat() {
   messagesEl.innerHTML = "";
   currentAssistantEl = null;
@@ -180,6 +236,14 @@ function initSession(apiKey) {
       metricsCost = u.cost_usd || 0;
       metricsTokens = (u.input || 0) + (u.output || 0);
       applyMetrics();
+    },
+    onAskUserChoice: async (question, options) => {
+      hideThinking();
+      currentAssistantEl = null;
+      currentAssistantText = "";
+      const picked = await renderPicker(question, options);
+      showThinking();
+      return picked;
     }
   });
   setStatus(true);
@@ -188,6 +252,16 @@ function initSession(apiKey) {
 async function send() {
   const text = inputEl.value.trim();
   if (!text || !session) return;
+  // If a picker is awaiting a response, route the typed text as its
+  // answer instead of opening a brand-new turn. That keeps every
+  // tool_use paired with a tool_result so the API doesn't reject the
+  // next message.
+  if (pendingPickerResolver) {
+    addMessage("user", text);
+    inputEl.value = "";
+    pendingPickerResolver(text);
+    return;
+  }
   addMessage("user", text);
   inputEl.value = "";
   sendBtn.disabled = true;

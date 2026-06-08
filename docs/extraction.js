@@ -10,20 +10,26 @@ import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.32.1";
 
 const HAIKU_MODEL = "claude-haiku-4-5";
 
-const EXTRACTION_SYSTEM = `Extract concrete findings from a mix-engineering AI assistant message. Findings are specific measurements, identified issues, and confirmed state — never recommendations or what the user should do.
+const EXTRACTION_SYSTEM = `Extract the REASONING STEPS the assistant took in this turn AND the findings each step produced. The goal is to preserve the methodology so the assistant can re-trace and audit its own logic in future turns. Raw numbers are kept when the question was numeric; qualitative conclusions are kept when the question was analytical — together with the supporting measurements that earned the conclusion.
 
-Output format: dash-prefix bullets, one per line, no preamble, no closing. Keep each bullet under 80 chars.
+Output format: numbered list, one step per line, format:
+N. [METHOD or SOURCE] → [FINDING]
 
-Good findings:
-- masking 400-600Hz between KICK and SUBS
-- master integrated LUFS -10.4, true peak -1.1dBTP
-- compressor on DRUMBUSS pulling 3-5dB GR sustained
-- side-mid imbalance: side energy -6dB below mid at 2-4kHz
-- transient density 4.2/sec — sparse for the genre
+Each step pairs WHAT was done with WHAT it produced. For a simple lookup, the finding is the measurement. For an analysis, the finding is the qualitative conclusion AND the numbers that grounded it.
 
-Skip: prose, narrative, suggestions, "you should...", subjective adjectives like "good"/"muddy" unless the assistant gave a concrete measurement to back it.
+Good examples:
+1. analyze_section(BUILD1→DROP) → integrated -23.9 LUFS, true peak -10.5 dBTP, LRA 8 LU
+2. Compared SUB time_series baseline (~16dB) to value at kick frames → drop -22dB, recovery in 2 frames (ducking confirmed, not masking)
+3. Read sm[] spectrum for PAD at 130-200Hz → ~-2dB (wide in that band)
+4. Cross-checked master stereo_correlation → 0.98 broadband; mass-weighted by mono lows, doesn't contradict per-band width
+5. get_track_devices on SUBS → Compressor2 active, Ducker (M4L, opaque) — sidechain present
+6. Compared KICK and BASS time_series + spectrum → phase-aligned, no anti-correlation (interference unlikely)
 
-If the assistant message has no extractable findings (e.g. it's a clarifying question or chitchat), output a single line: NONE`;
+ALWAYS preserve concrete measurements the message reports, even when stated as a plain data dump with no analysis (e.g. "KICK peak [16.9, 16.9], rms [15.3, 15.3]"). For a pure data dump, the method is the tool and the finding is the values verbatim — list them so the assistant can cite and defend them later. A message containing numbers is NEVER NONE.
+
+Skip: recommendations ("you should..."), subjective adjectives without a method behind them ("muddy", "tight"), narrative prose, restating the user's question.
+
+Output NONE only when the message contains NO measurements and NO reasoning at all — a clarifying question, chitchat, an error report with no data, or an ask_user_choice prompt.`;
 
 export async function extractFindings({ apiKey, assistantText }) {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });

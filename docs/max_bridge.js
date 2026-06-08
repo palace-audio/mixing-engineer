@@ -1,15 +1,25 @@
 const pending = new Map();
+const chunkBuf = new Map(); // requestId -> { parts: [], total }
 let nextId = 1;
 
-function handleMaxResult(requestId, payload) {
-  const r = pending.get(String(requestId));
+// Results arrive chunked: live_query.js splits the encoded JSON into N atoms and
+// sends each as "result <requestId> <index> <total> <chunk>". Reassemble here,
+// then decode + parse once all chunks for a requestId are in.
+function handleMaxResult(requestId, chunkIndex, total, chunkData) {
+  const key = String(requestId);
+  const r = pending.get(key);
   if (!r) return;
-  pending.delete(String(requestId));
+  let buf = chunkBuf.get(key);
+  if (!buf) { buf = { parts: [], total: Number(total) }; chunkBuf.set(key, buf); }
+  buf.parts[Number(chunkIndex)] = chunkData;
+  let have = 0;
+  for (let i = 0; i < buf.total; i++) if (typeof buf.parts[i] === "string") have++;
+  if (have < buf.total) return; // wait for remaining chunks
+  chunkBuf.delete(key);
+  pending.delete(key);
   clearTimeout(r.timer);
   try {
-    // Payload is URL-encoded JSON: Max splits messages on whitespace, so
-    // raw JSON would fragment into multiple atoms across the patchcord.
-    const jsonStr = decodeURIComponent(payload);
+    const jsonStr = decodeURIComponent(buf.parts.join(""));
     r.resolve(JSON.parse(jsonStr));
   } catch (e) {
     r.resolve({ error: "parse error: " + e.message });
@@ -26,6 +36,7 @@ export function query(queryName, ...params) {
     const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
+        chunkBuf.delete(id);
         resolve({ error: "LiveAPI query timeout: " + queryName });
       }
     }, 15000);
