@@ -7,6 +7,15 @@
 *.maxhelp~
 .maxauto*
 
+# Manual backups
+*.bak
+*.bak2
+*.bak[0-9]*
+
+# Dev scaffolding / ground-truth logs
+focus_debug.txt
+.dev_server.py
+
 # Editor / IDE
 .vscode/
 .idea/

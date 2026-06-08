@@ -187,6 +187,30 @@ body {
 }
 .msg.opener hr { border: none; border-top: 1px solid #3a3a3a; margin: 8px 0; }
 
+.msg.picker { background: #2a2a2a; max-width: 100%; align-self: stretch; }
+.picker-question { color: #fff; font-weight: 500; margin-bottom: 8px; }
+.picker-options { display: flex; flex-direction: column; gap: 4px; }
+.picker-btn {
+  text-align: left;
+  background: #1f2a3a;
+  color: #e0e0e0;
+  border: 1px solid #3a4a5f;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: inherit;
+  font-size: inherit;
+}
+.picker-btn:hover:not(:disabled) { background: #2a3f5a; border-color: #4a6fa5; }
+.picker-btn:disabled { cursor: default; opacity: 0.6; }
+.picker-btn.picker-unchosen { background: #232323; border-color: #2a2a2a; opacity: 0.45; }
+.picker-btn.picker-chosen { background: #2a3f5a; border-color: #4a6fa5; opacity: 1; }
+.picker-label { font-weight: 500; }
+.picker-desc { font-size: 11px; color: #b0b0b0; }
+
 #input-row {
   padding: 10px;
   background: #161616;
