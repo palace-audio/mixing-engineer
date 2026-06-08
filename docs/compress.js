@@ -196,6 +196,19 @@ function compressAnalyzeSection(r) {
     if (Object.keys(pm).length > 0) out.pairwise_masking = pm;
   }
 
+  if (r.phase_cancellation) {
+    // Between-element phase cancellation (Step 2). computeBetweenPhase already
+    // gates hard (presence + coherence>0.5 + cancel<−1.5dB + persistence), so any
+    // pair present here is a real, coherence-confirmed cancellation — pass through.
+    // Absence of a pair = no stable destructive interference between those two.
+    const pc = {};
+    for (const k of Object.keys(r.phase_cancellation)) {
+      const p = r.phase_cancellation[k];
+      if (p && p.length > 0) pc[k] = p;
+    }
+    if (Object.keys(pc).length > 0) out.phase_cancellation = pc;
+  }
+
   if (r.reference) {
     const ref = { ...r.reference };
     delete ref.fft_meta;
