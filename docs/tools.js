@@ -474,6 +474,7 @@ export async function runTool(name, input) {
             }
           }
           if (focus && focus.pairwise_masking) result.pairwise_masking = focus.pairwise_masking;
+          if (focus && focus.phase_cancellation) result.phase_cancellation = focus.phase_cancellation;
           result.focus_routing = routingResults;
 
           // For grouped focus tracks, auto-fetch parent group device chain.

@@ -43,8 +43,14 @@ AI an inaccurate number** — the model has no ears and will confidently repeat 
 - ✅ **Step 1 BUILT — per-band mono-compatibility.** Max: cross-spectrum poke~ in all 8
   `spectrum_analyzer_focus_N.maxpat` → `focus_N_reLR`/`imLR` buffers (in `focus_chain_N.maxpat`). JS:
   `focusMonoAccum` + `computeMonoCompat()` → `mono_compat` field. **User must save+reload the device.**
-- ⏳ Step 2 (between-element phase cancellation), the masking-depth redesign, streaming transients/ducking,
-  AR per-band followers, α-from-dt — all designed in §14, **pending a clean re-audit before building**.
+- ✅ **Step 2 BUILT — between-element phase cancellation.** Max: complex-mid poke~ in all 8 analyzers →
+  `focus_N_reM`/`imM` buffers. JS: `focusMidPow` (Σ|M|²) + `focusPairAccum` (pairwise cross-spectrum) +
+  `computeBetweenPhase()` → `phase_cancellation = {"A↔B":[{hz,cancel_db,phase_deg,coherence}]}`. ALL
+  unordered pairs (kick/bass may be in any voice). Cross-spectrum accumulated in JS (in-process buffer
+  reads, no bridge) — 2 poke~/voice, not O(N²) Max chains. Coherence>0.5 gate is the safeguard; C4
+  delay-comp deferred (delayed pairs abstain → safe, never false-clear). **User must SAVE+reload.**
+- ⏳ Masking-depth redesign (C1), streaming transients/ducking (C2/C3), AR per-band followers, α-from-dt
+  — all designed in §14, **pending a clean re-audit before building**.
 
 ## Verify after editing
 ```bash

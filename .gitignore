@@ -33,3 +33,6 @@ focus_debug.txt
 node_modules/
 
 .Rhistory
+
+# M4L device — kept local, never pushed until released
+device/
