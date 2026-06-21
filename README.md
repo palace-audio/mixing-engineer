@@ -30,11 +30,15 @@ The chat keeps full conversation history within a session, so you can ask follow
 
 **Inspect specific tracks.** Name up to eight tracks and the device taps each in parallel — full spectrum, RMS over time, active automation, and live gain reduction from compressors and limiters.
 
-**Diagnose masking and sidechain.** Cross-checks spectral overlap against temporal energy correlation to distinguish masking (two tracks loud together in overlapping bands) from sidechain ducking (anti-correlated energy).
+**Diagnose masking and sidechain.** Cross-checks spectral overlap against temporal energy correlation to distinguish masking (two tracks loud together in overlapping bands) from sidechain ducking (anti-correlated energy), and reports each duck's depth and recovery.
+
+**Check stereo, phase, and mono compatibility.** Measures each track's stereo image and width, flags phase cancellation between elements (the usual culprit behind a weak low end when kick and sub fight), and tests how the mix survives summed to mono.
+
+**Catch transients and resonances.** Reports per-band onset density and decay times — punchy vs. sustained — and flags ringing resonances anywhere in the spectrum, with no fixed "harsh" band.
 
 **Read device chains.** Walks every device on every track, including nested chains inside Effect Racks. Reports what each chain is doing audibly — which EQ bands are doing work, where a compressor is actually pulling, whether a saturator's dry/wet renders it inaudible.
 
-**Compare to a reference.** Route a reference track into the device's sidechain input and ask how your mix differs. Comparison is loudness-normalized.
+**Compare to a reference.** Select a reference track and ask how your mix differs from it — comparison is loudness-normalized, so it's content, not level.
 
 **Mix vs. master state awareness.** Detects whether your mix is still in progress or already mastered from integrated LUFS, true peak headroom, and crest factor.
 
@@ -46,24 +50,23 @@ The chat keeps full conversation history within a session, so you can ask follow
 
 1. Download the latest `.amxd` from the [Releases page](#) (link will appear once a release is published).
 2. Drag the `.amxd` onto the **master track** of your Ableton Live set.
-3. Open the device. You'll be asked for an Anthropic API key the first time.
+3. Open the device. The first time, choose your model provider and enter its key (see below).
 
-## Getting an API key
+## Choosing a model
 
-The device talks to Claude (Anthropic's AI) to do the actual analysis. You bring your own API key so the cost of running it shows up on your account, not someone else's.
+You supply the AI model that does the analysis, so any cost lands on your account, not someone else's. Open settings (⚙) and pick a provider:
 
-1. Go to **console.anthropic.com** in your browser.
-2. Sign up or log in.
-3. Go to **API Keys** in the sidebar and create a new key. It starts with `sk-ant-`.
-4. Paste it into the device when prompted.
+- **Anthropic (Claude)** — paste a key from console.anthropic.com (`sk-ant-…`). Sharpest analysis.
+- **OpenRouter** — one key for many cloud models; the path when your machine can't run a large model locally.
+- **Local (Ollama / LM Studio)** — runs on your own machine: free per question, no key, but needs a capable model and the RAM to hold it.
 
-Typical cost per question: **1¢ to 10¢**, depending on how deep the analysis goes. You can see the running cost in the corner of the chat panel.
+The running cost — or **free**, for local — shows in the corner of the chat panel.
 
 ## Privacy and cost
 
-- **Your API key is stored on your computer only.** It never leaves your machine except to call Anthropic's API directly. The device has no server of its own.
-- **Audio analysis is summarized into numbers before being sent.** Anthropic sees the frequency balance, peak levels, etc. — not the raw audio.
-- **You pay Anthropic directly.** Each conversation costs cents. There's no subscription to anyone else.
+- **Your API key is stored on your computer only.** It never leaves your machine except to call your chosen provider directly. The device has no server of its own.
+- **Audio is summarized into numbers before being sent.** The model sees frequency balance, peak levels, and the like — never the raw audio.
+- **You pay your provider directly**, or nothing if you run a local model. No subscription to anyone else.
 
 ## Project memory
 
@@ -72,13 +75,13 @@ Each Live set you use the device with has its own small memory note. The device 
 ## Troubleshooting
 
 - **Chat panel is blank.** The device couldn't reach the UI hosted on GitHub Pages. Check your internet connection. If you're offline, the device won't work — the UI is fetched fresh each time.
-- **"No API key" indicator stays red.** Click the gear icon in the top-right of the chat panel, paste your key.
+- **Status stays red / "Offline".** Click the gear icon top-right, pick your provider, and enter its key.
 - **Responses time out.** Open Max Console in Ableton (View → Max Window) and look for red errors. Most often this is the device losing its connection to the Live set — close the set and reopen.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Use it, fork it, ship your own version. Just keep the copyright notice.
+Proprietary — all rights reserved. See [LICENSE](LICENSE). The source is public so the device can run (its interface is served from this repository) and for transparency, but it is **not** open source: you may not copy, clone, fork, reuse, redistribute, modify, or monetize the code or its prompts without written permission.
 
 ## Credits
 
-Built by Alp Isbir. Powered by Claude (Anthropic). Uses Max for Live (Ableton + Cycling '74).
+Built by Alp Isbir. Powered by Claude (Anthropic) or any OpenAI-compatible model. Uses Max for Live (Ableton + Cycling '74).

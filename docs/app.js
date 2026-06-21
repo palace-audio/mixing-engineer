@@ -1,7 +1,14 @@
 import { ClaudeSession } from "./anthropic.js";
+import { OpenAICompatSession } from "./openai.js";
 import { query } from "./max_bridge.js";
-import { mountSettings, getStoredKey } from "./settings.js";
+import { mountSettings, getStoredConfig } from "./settings.js";
 import { runTool } from "./tools.js";
+
+// Cost readout policy by provider. Local inference → "free"; Anthropic (computed
+// from token prices) and OpenRouter (real spend returned in usage.cost) → live
+// "$x.xxx"; any other compat server doesn't report cost → "$—" (tokens always shown).
+const LOCAL_PROVIDERS = new Set(["ollama", "lmstudio"]);
+const COST_TRACKED_PROVIDERS = new Set(["anthropic", "openrouter"]);
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("input");
@@ -12,6 +19,7 @@ const costEl = document.getElementById("cost");
 const tokEl = document.getElementById("tok");
 
 let session = null;
+let turnInFlight = false;   // true while a turn is streaming/running tools — guards against concurrent send()
 let currentAssistantEl = null;
 let currentAssistantText = "";
 let thinkingEl = null;
@@ -19,6 +27,13 @@ let thinkingEl = null;
 let metricsStatus = "Offline";
 let metricsCost = 0;
 let metricsTokens = 0;
+let costMode = "usd";   // "usd" | "free" (local) | "untracked" (cost not computed)
+
+function costText(decimals) {
+  if (costMode === "free") return "free";
+  if (costMode === "untracked") return "$—";
+  return "$" + metricsCost.toFixed(decimals);
+}
 
 function applyMetrics() {
   if (statusEl) {
@@ -28,14 +43,14 @@ function applyMetrics() {
     else statusEl.classList.add("connected");
   }
   if (statusTextEl) statusTextEl.textContent = metricsStatus;
-  if (costEl) costEl.textContent = "$" + metricsCost.toFixed(3);
+  if (costEl) costEl.textContent = costText(3);
   if (tokEl) {
     tokEl.textContent = metricsTokens >= 1000
       ? (metricsTokens / 1000).toFixed(1) + "k tok"
       : metricsTokens + " tok";
   }
   if (window.max && typeof window.max.outlet === "function") {
-    const costStr = "$" + metricsCost.toFixed(2);
+    const costStr = costText(2);
     const tokStr = metricsTokens >= 1000
       ? (metricsTokens / 1000).toFixed(1) + "k"
       : String(metricsTokens);
@@ -94,33 +109,172 @@ function renderMarkdown(text) {
   return s;
 }
 
-const OPENER_NEW = `Welcome. I work best when I know what we're mixing.
+// Project-level setup. Two fields anchor every read (genre, delivery) and two
+// optional recall anchors (label, track). The form writes memory DIRECTLY via
+// runTool("save_memory") — a local localStorage write, no model call — so both
+// first-time onboarding AND later edits are costless: revising the canonical
+// fields never spends an inference turn. Genre and platform are free of
+// derivable filler; the rest the AI reads from the set and the conversation.
+const ONBOARD_PLATFORMS = ["streaming", "club / DJ", "vinyl", "film / TV / sync", "broadcast"];
 
-Before we dig in, tell me:
-- **Genre / style** (e.g. melodic techno, dnb, ambient)?
-- **Where will this be heard** (club, headphones, car, streaming)?
-- **References** — any tracks you want this to sit alongside?
-- **What's bugging you right now** — anything specific you want me to look at first?
+function onboardTextField(labelText, placeholder, value) {
+  const row = document.createElement("div");
+  row.className = "onboard-row";
+  const label = document.createElement("label");
+  label.className = "onboard-label";
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "onboard-input";
+  input.placeholder = placeholder;
+  if (value) input.value = value;
+  row.appendChild(label);
+  row.appendChild(input);
+  return { row, input };
+}
 
-You don't have to answer all of it. Even one line of context shapes how I read your mix.`;
+// Lenient parse of stored memory back into the four setup fields so the edit
+// form can prefill. Handles the canonical inline form ("genre: …", "heard on: …")
+// and best-effort the older header-then-value form ("## GENRE\n<value>") so an
+// edit + save migrates a legacy project onto the clean shape.
+function parseSetupFields(text) {
+  const out = { genre: "", platforms: [], label: "", track: "" };
+  const assign = (key, val) => {
+    key = key.trim().toLowerCase();
+    val = val.trim();
+    if (!val) return;
+    if (key === "genre" && !out.genre) out.genre = val;
+    else if ((key === "heard on" || key === "platform" || key === "delivery") && !out.platforms.length)
+      out.platforms = val.split(",").map((s) => s.trim()).filter(Boolean);
+    else if (key === "label" && !out.label) out.label = val;
+    else if (key === "track" && !out.track) out.track = val;
+  };
+  let header = "";
+  for (const raw of (text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const hdr = line.match(/^#{1,6}\s*(.+)$/);
+    if (hdr) { header = hdr[1].trim(); continue; }
+    const colon = line.indexOf(":");
+    if (colon > 0 && colon < 20) { assign(line.slice(0, colon), line.slice(colon + 1)); header = ""; continue; }
+    if (header) { assign(header, line); }
+  }
+  return out;
+}
+
+function renderOnboardingForm(prefill, isEdit) {
+  prefill = prefill || { genre: "", platforms: [], label: "", track: "" };
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant onboard";
+
+  const intro = document.createElement("div");
+  intro.className = "onboard-intro";
+  intro.innerHTML = renderMarkdown(isEdit
+    ? "Editing project setup. Change what's moved — this overwrites what I remember."
+    : "New project. Two things anchor how I read every measurement — the rest I catch from your set and as we talk.");
+  wrap.appendChild(intro);
+
+  const genre = onboardTextField("Genre / subgenre", "melodic techno, liquid dnb, ambient…", prefill.genre);
+  wrap.appendChild(genre.row);
+
+  const platLabel = document.createElement("label");
+  platLabel.className = "onboard-label";
+  platLabel.textContent = "Where will it be heard?";
+  wrap.appendChild(platLabel);
+  const chips = document.createElement("div");
+  chips.className = "onboard-chips";
+  const selected = new Set();
+  ONBOARD_PLATFORMS.forEach((p) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "onboard-chip";
+    chip.textContent = p;
+    if (prefill.platforms && prefill.platforms.includes(p)) { selected.add(p); chip.classList.add("selected"); }
+    chip.addEventListener("click", () => {
+      if (selected.has(p)) { selected.delete(p); chip.classList.remove("selected"); }
+      else { selected.add(p); chip.classList.add("selected"); }
+      updateSaveState();
+    });
+    chips.appendChild(chip);
+  });
+  wrap.appendChild(chips);
+
+  const label = onboardTextField("Label you're chasing (optional)", "Drumcode, Anjunadeep…", prefill.label);
+  wrap.appendChild(label.row);
+  const track = onboardTextField("Track you're chasing (optional)", "artist – title", prefill.track);
+  wrap.appendChild(track.row);
+
+  const hint = document.createElement("div");
+  hint.className = "onboard-hint";
+  hint.textContent = "A well-known label or track works best — I reason from what I recognize.";
+  wrap.appendChild(hint);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "onboard-save";
+  saveBtn.textContent = isEdit ? "Update" : "Save & start";
+  wrap.appendChild(saveBtn);
+
+  function updateSaveState() {
+    saveBtn.disabled = !(genre.input.value.trim() && selected.size > 0);
+  }
+  genre.input.addEventListener("input", updateSaveState);
+  updateSaveState();
+
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    const lines = [
+      `genre: ${genre.input.value.trim()}`,
+      `heard on: ${Array.from(selected).join(", ")}`,
+    ];
+    if (label.input.value.trim()) lines.push(`label: ${label.input.value.trim()}`);
+    if (track.input.value.trim()) lines.push(`track: ${track.input.value.trim()}`);
+    const r = await runTool("save_memory", { content: lines.join("\n") });
+    wrap.remove();
+    if (r && r.ok) {
+      const verb = isEdit ? "Updated" : "Saved";
+      addMessage("assistant", `${verb} — **${genre.input.value.trim()}**, for ${Array.from(selected).join(", ")}. Tell me what to look at, or just play the section.`);
+    } else {
+      addMessage("assistant", `Couldn't save that — ${(r && r.error) || "unknown error"}. We can still work; I just won't carry it across sessions.`);
+    }
+  });
+
+  messagesEl.appendChild(wrap);
+}
 
 function renderOpener(memoryText, noProject) {
   if (messagesEl.children.length > 0) return;
-  const el = document.createElement("div");
-  el.className = "msg assistant opener";
   if (noProject) {
+    const el = document.createElement("div");
+    el.className = "msg assistant opener";
     el.innerHTML = renderMarkdown(`Your Live set isn't saved yet, so I can't store or recall memory for this project. **Save the set** (Cmd+S) and reload this device to enable persistent memory. We can still chat — just nothing carries across sessions.`);
     messagesEl.appendChild(el);
     return;
   }
   const trimmed = (memoryText || "").trim();
-  if (trimmed.length < 50) {
-    el.innerHTML = renderMarkdown(OPENER_NEW);
-  } else {
-    const intro = `Here's what I remember about this project from previous sessions. Skim it and tell me what's changed or what's wrong before we dig in — minds change, mixes move.\n\n---\n\n`;
-    el.innerHTML = renderMarkdown(intro + trimmed);
+  if (trimmed.length === 0) {
+    renderOnboardingForm();
+    return;
   }
+  const el = document.createElement("div");
+  el.className = "msg assistant opener";
+  const intro = `Here's what I remember about this project from previous sessions. Skim it and tell me what's changed or what's wrong before we dig in — minds change, mixes move.\n\n---\n\n`;
+  el.innerHTML = renderMarkdown(intro + trimmed);
   messagesEl.appendChild(el);
+
+  // Costless edit path: revising the canonical setup fields shouldn't cost an
+  // inference any more than first-time onboarding did. Opens the same form,
+  // prefilled, writing straight to memory on save.
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "onboard-edit-link";
+  editBtn.textContent = "Edit setup";
+  editBtn.addEventListener("click", () => {
+    el.remove();
+    editBtn.remove();
+    renderOnboardingForm(parseSetupFields(trimmed), true);
+  });
+  messagesEl.appendChild(editBtn);
 }
 
 function addMessage(role, text) {
@@ -201,9 +355,8 @@ async function loadInitialMemory() {
   else renderOpener(r?.content || "", false);
 }
 
-function initSession(apiKey) {
-  session = new ClaudeSession({
-    apiKey,
+function initSession(config) {
+  const callbacks = {
     onText: (delta) => {
       hideThinking();
       if (!currentAssistantEl) {
@@ -223,6 +376,7 @@ function initSession(apiKey) {
       hideThinking();
       currentAssistantEl = null;
       currentAssistantText = "";
+      turnInFlight = false;
       sendBtn.disabled = false;
     },
     onError: (message) => {
@@ -230,6 +384,7 @@ function initSession(apiKey) {
       addMessage("error", `error: ${message}`);
       currentAssistantEl = null;
       currentAssistantText = "";
+      turnInFlight = false;
       sendBtn.disabled = false;
     },
     onUsage: (u) => {
@@ -245,7 +400,14 @@ function initSession(apiKey) {
       showThinking();
       return picked;
     }
-  });
+  };
+  // Same callback contract for either provider; the config decides the class.
+  session = config.provider === "anthropic"
+    ? new ClaudeSession({ apiKey: config.apiKey, ...callbacks })
+    : new OpenAICompatSession({ ...config, ...callbacks });
+  costMode = LOCAL_PROVIDERS.has(config.provider) ? "free"
+    : COST_TRACKED_PROVIDERS.has(config.provider) ? "usd"
+    : "untracked";
   setStatus(true);
 }
 
@@ -262,9 +424,16 @@ async function send() {
     pendingPickerResolver(text);
     return;
   }
+  // Guard against a second turn while one is still streaming. The Enter handler
+  // bypasses the disabled button, and starting a new send() mid-turn injected a
+  // user message between a tool_use and its tool_result → the API rejected the
+  // next request and the chat had to be restarted. Ignore the input (keep the
+  // typed text so the user can resend) until the current turn finishes.
+  if (turnInFlight) return;
   addMessage("user", text);
   inputEl.value = "";
   sendBtn.disabled = true;
+  turnInFlight = true;
   currentAssistantEl = null;
   showThinking();
   await session.send(text);
@@ -276,8 +445,8 @@ inputEl.addEventListener("keydown", (e) => {
 });
 
 const settings = mountSettings({
-  onSaved: (apiKey) => {
-    initSession(apiKey);
+  onSaved: (config) => {
+    initSession(config);
     if (messagesEl.children.length === 0) loadInitialMemory();
   },
   onCleared: () => {
@@ -287,11 +456,13 @@ const settings = mountSettings({
   }
 });
 
-const existingKey = getStoredKey();
-if (existingKey) {
-  initSession(existingKey);
+// getStoredConfig migrates any legacy Anthropic-only key, so existing users
+// boot straight into the same Anthropic session with no re-entry.
+const storedConfig = getStoredConfig();
+if (storedConfig) {
+  initSession(storedConfig);
   loadInitialMemory();
 } else {
   setStatus(false);
-  settings.showOverlay("");
+  settings.showOverlay();
 }

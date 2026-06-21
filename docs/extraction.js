@@ -3,8 +3,7 @@
 // payloads (~30KB+ for analyze_section) can be replaced with a ~200-byte
 // summary on subsequent turns. Findings carry forward; raw payloads don't.
 //
-// Model is pinned to a specific snapshot so behavior doesn't drift when
-// Anthropic releases new Haiku versions.
+// Floating family alias — tracks the latest Haiku 4.5 release automatically.
 
 import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.32.1";
 

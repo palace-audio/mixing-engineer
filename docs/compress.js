@@ -8,17 +8,34 @@
 
 export function compressToolResult(name, result) {
   if (!result || typeof result !== "object" || result.error) return result;
+  let out;
   switch (name) {
-    case "analyze_section":      return compressAnalyzeSection(result);
-    case "list_tracks":          return compressListTracks(result);
-    case "get_track_devices":    return compressTrackDevices(result);
-    case "get_device_params":    return compressDeviceParams(result);
-    case "get_session_overview": return compressSessionOverview(result);
-    case "get_track_routing":    return compressTrackRouting(result);
-    case "get_returns":          return compressReturns(result);
-    default: return result;
+    case "analyze_section":      out = compressAnalyzeSection(result); break;
+    case "list_tracks":          out = compressListTracks(result); break;
+    case "get_track_devices":    out = compressTrackDevices(result); break;
+    case "get_device_params":    out = compressDeviceParams(result); break;
+    case "get_session_overview": out = compressSessionOverview(result); break;
+    case "get_track_routing":    out = compressTrackRouting(result); break;
+    case "get_returns":          out = compressReturns(result); break;
+    default:                     out = result;
   }
+  return out;
 }
+
+// Masking: how many of the worst bands per pair ship in the DEFAULT payload. The rest
+// stay in the sessionFindings archive (pull via query_stored_findings, aspect 'masking').
+// `masked` is sorted worst-first, so the leading bands still reveal whether the damage
+// is one cluster around a frequency or scattered across the spectrum.
+const MASK_TOP_BANDS = 5;
+
+// Pair-relevance gate: drop a masking pair whose DEEPEST band is shallower than one loudness-halving
+// (~10 dB ≈ ½ perceived loudness, Stevens). The masking-depth window is [-3, -30] in live_query.js
+// (-3 = per-band audibility gate, -30 = saturation), so -10 keeps every substantial collision and
+// sends only the mild -3..-10 tail to the archive. Not hand-picked — the canonical loudness-halving step.
+const MASK_PAIR_DEPTH_DB = -10;
+// signal_vs_own_peak_db carries info only when the masked band is within a loudness-halving of the
+// signal's OWN spectral peak (its body); below that it's tail — omit (null). Same anchor as above.
+const SVOP_BODY_DB = -10;
 
 // ============================================================================
 // Helpers
@@ -42,6 +59,88 @@ function dropEmpty(o) {
     else if (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) delete o[k];
   }
   return o;
+}
+
+// Ducking dip array-of-objects → parallel arrays.
+// trigger[] preserves track-name strings (name encoding runs after this).
+// null entries in trigger[] mark unattributed dips.
+function compressDucking(ducking) {
+  const beat = [], depth_db = [], recovery_beats = [], trigger = [];
+  let hasTrigger = false;
+  for (const dip of ducking) {
+    beat.push(dip.beat);
+    depth_db.push(dip.depth_db);
+    recovery_beats.push(dip.recovery_beats);
+    if (dip.trigger != null) { trigger.push(dip.trigger); hasTrigger = true; }
+    else trigger.push(null);
+  }
+  const out = { beat, depth_db, recovery_beats };
+  if (hasTrigger) out.trigger = trigger;
+  return out;
+}
+
+// Short-symbol name encoding: derive codes from voice names (first uppercase letter
+// per space/hyphen-delimited word, leading digits stripped; counter suffix on collision).
+// Returns {codes:{name→sym}, decode:{sym→name}}.
+function buildNameCodes(names) {
+  const codes = {}, decode = {};
+  const used = new Set();
+  for (const name of names) {
+    const words = name.split(/[\s\-_]+/).filter(Boolean)
+      .map(w => w.replace(/^\d+/, ''));
+    let base = words.map(w => w[0] ? w[0].toUpperCase() : '').join('') || name[0].toUpperCase();
+    let sym = base, n = 2;
+    while (used.has(sym)) sym = base + (n++);
+    used.add(sym);
+    codes[name] = sym;
+    decode[sym] = name;
+  }
+  return { codes, decode };
+}
+
+// Replace all voice-name occurrences in the compressed payload with their symbols.
+// Touches: focus keys, focus_routing track fields, focus_group_chains keys,
+// pairwise_masking pair keys, phase_cancellation pair keys, ducking trigger arrays.
+function applyNameCodes(out, codes) {
+  const sub = k => codes[k] || k;
+  const remapKey = (k, sep) => {
+    const i = k.indexOf(sep);
+    return i < 0 ? k : sub(k.slice(0, i)) + sep + sub(k.slice(i + sep.length));
+  };
+  if (out.focus) {
+    const f = {};
+    for (const [k, v] of Object.entries(out.focus)) f[sub(k)] = v;
+    out.focus = f;
+    for (const v of Object.values(out.focus)) {
+      if (v.ducking && v.ducking.trigger) {
+        v.ducking.trigger = v.ducking.trigger.map(t => t != null ? sub(t) : null);
+      }
+    }
+  }
+  if (out.focus_routing) {
+    for (const fr of out.focus_routing) { if (fr.track) fr.track = sub(fr.track); }
+  }
+  if (out.focus_group_chains) {
+    const fgc = {};
+    for (const [k, v] of Object.entries(out.focus_group_chains)) fgc[sub(k)] = v;
+    out.focus_group_chains = fgc;
+  }
+  if (out.focus_voice_group) {
+    // keys = focus tracks (encode); values = group names (leave as-is)
+    const fvg = {};
+    for (const [k, v] of Object.entries(out.focus_voice_group)) fvg[sub(k)] = v;
+    out.focus_voice_group = fvg;
+  }
+  if (out.pairwise_masking) {
+    const pm = {};
+    for (const [k, v] of Object.entries(out.pairwise_masking)) pm[remapKey(k, '→')] = v;
+    out.pairwise_masking = pm;
+  }
+  if (out.phase_cancellation) {
+    const pc = {};
+    for (const [k, v] of Object.entries(out.phase_cancellation)) pc[remapKey(k, '↔')] = v;
+    out.phase_cancellation = pc;
+  }
 }
 
 // Spectrum: [{hz, m, sm}, ...] → {hz:[...], m:[...], sm:[...]}
@@ -69,7 +168,9 @@ function compactTimeSeriesTuples(ts) { return ts; }
 // Master: peak_left/right/rms_left/right → peak:[L,R], rms:[L,R] (peak is a real
 // time-domain sample peak). Focus (isFocus): there is NO true peak — both numbers
 // come from the FFT-frame RMS, so they're labeled rms_max:[L,R] (loudest frame)
-// and rms_avg:[L,R] (mean frame) to avoid implying a sample peak.
+// and rms_avg:[L,R] (true RMS across frames) to avoid implying a sample peak.
+// The avg slot reads rms_db (power mean = sqrt(mean(x^2))), NOT mean_db (arithmetic
+// mean of amplitude), so it's a real RMS — see timeStats/pack in live_query.js.
 // Mutates the passed object in place. Drops sample_count (noise for Claude).
 function compactPackPair(obj, isFocus) {
   const pl = obj.peak_left, pr = obj.peak_right, rl = obj.rms_left, rr = obj.rms_right;
@@ -79,7 +180,7 @@ function compactPackPair(obj, isFocus) {
     obj[maxKey] = [pl ? r1(pl.max_db) : null, pr ? r1(pr.max_db) : null];
   }
   if (rl || rr) {
-    obj[avgKey] = [rl ? r1(rl.mean_db) : null, rr ? r1(rr.mean_db) : null];
+    obj[avgKey] = [rl ? r1(rl.rms_db) : null, rr ? r1(rr.rms_db) : null];
   }
   delete obj.peak_left; delete obj.peak_right;
   delete obj.rms_left;  delete obj.rms_right;
@@ -104,14 +205,47 @@ function compactLufs(lufs) {
 // Per-tool compressors
 // ============================================================================
 
+// One compact device representation, shared by the per-voice focus chain, the
+// parent group chain, and get_track_devices — so the AI sees ONE device shape
+// everywhere. Raw listDevices entry → {i, name, class, class_inferred, native?,
+// off?, gr_db?, eq?, chain_path?}. Key params ride inline (eq corners, snapshot
+// GR) so reading the chain never needs a get_device_params round-trip.
+// On/off + chain topology, shared by both device-compaction paths so they never diverge.
+// own_on is the device's own switch (null ⇒ unreadable → fall back to is_active). off = the
+// device itself is switched off. bypassed = switch ON but the device is effectively inactive
+// because an enclosing rack/chain mutes or zones it out (is_active 0) — is_active alone
+// conflates the two. chains = the rack's chain topology, incl. empty/dry pass-through chains.
+function applyDeviceState(o, d) {
+  const own = d.own_on != null ? d.own_on : d.is_active;
+  if (own === false) o.off = true;
+  else if (d.is_active === false) o.bypassed = true;
+  if (d.chains) o.chains = d.chains;
+}
+
+function compactDeviceEntry(d) {
+  const o = { i: d.index, name: d.name, class: d.class_name };
+  const { native, class_inferred } = classifyDevice(d.class_name, d.name);
+  if (!native) o.native = false;
+  o.class_inferred = class_inferred;
+  applyDeviceState(o, d);
+  if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
+  if (d.eq_bands_active) o.eq = d.eq_bands_active;
+  if (d.chain_path) o.chain_path = d.chain_path;
+  return o;
+}
+
 function compressAnalyzeSection(r) {
   const out = { section: r.section };
 
   if (r.master) {
     const m = { ...r.master };
     delete m.fft_meta;
-    if (m.spectrum) m.spectrum = compactSpectrum(m.spectrum);
-    if (m.time_series) m.time_series = compactTimeSeriesObjects(m.time_series);
+    if (m.spectrum) {
+      m.spectrum = compactSpectrum(m.spectrum);
+      delete m.spectrum.hz;   // fixed grid in system prompt (hz-master)
+      delete m.spectrum.sm;   // archived in __master__ sessionFindings
+    }
+    delete m.time_series;     // archived in __master__ sessionFindings
     if (m.lufs) m.lufs = compactLufs(m.lufs);
     compactPackPair(m);
     dropEmpty(m);
@@ -127,13 +261,48 @@ function compressAnalyzeSection(r) {
     for (const key of Object.keys(r.focus)) {
       if (key === "diagnostic") continue;
       const v = { ...r.focus[key] };
-      if (v.spectrum) v.spectrum = compactSpectrum(v.spectrum);
-      if (v.time_series) v.time_series = compactTimeSeriesTuples(v.time_series);
+      // spectrum, time_series, and the per-band image_pos_bands are archived in sessionFindings;
+      // pull via query_stored_findings. Default payload keeps only the broadband image_pos scalar.
+      delete v.spectrum;
+      delete v.time_series;
+      delete v.image_pos_bands;
       compactPackPair(v, true);
       delete v.frames_averaged;
-      // Keep transients only when non-empty bands exist.
-      if (v.transients && Object.keys(v.transients).length === 0) delete v.transients;
+      // transients is now a per-band onset-DENSITY scalar map (onsets/beat) — already compact;
+      // dropEmpty below removes it when no band fired.
+      if (v.ducking && v.ducking.length > 0) v.ducking = compressDucking(v.ducking);
+      // The per-voice own device chain is NO LONGER shipped — tools.js stopped fetching it, and we
+      // strip it unconditionally here as enforcement. The AI pulls get_track_devices FRESH on demand
+      // when a finding implicates a device (lighter payload + signal-first, not device-first, reasoning).
+      delete v.devices;
       dropEmpty(v);
+      // Parallel-array reshape: resonances
+      if (v.resonances && v.resonances.length > 0) {
+        const lo = [], hi = [], prom = [], decay = [], ring = [];
+        for (const res of v.resonances) {
+          lo.push(res.lo_hz);
+          hi.push(res.hi_hz);
+          prom.push(res.prominence_db);
+          decay.push(typeof res.decay_ms === "number" ? res.decay_ms : res.decay_ms === "sustained" ? "s" : null);
+          ring.push(typeof res.ring_prominence === "number" ? res.ring_prominence : null);
+        }
+        v.resonances = { lo, hi, prom, decay };
+        if (ring.some(x => x !== null)) v.resonances.ring = ring;
+      }
+      // Parallel-array reshape: transient_impact
+      if (v.transient_impact && typeof v.transient_impact === "object") {
+        const BANDS = ["sub", "low_mid", "high_mid", "high"];
+        const crest3 = [], crest30 = [], env = [], cons = [];
+        for (const band of BANDS) {
+          const b = v.transient_impact[band];
+          crest3.push(b && b.crest_curve && b.crest_curve["3"] != null ? b.crest_curve["3"] : null);
+          crest30.push(b && b.crest_curve && b.crest_curve["30"] != null ? b.crest_curve["30"] : null);
+          env.push(b && b.envelope_crest_db != null ? b.envelope_crest_db : null);
+          cons.push(b && b.consistency != null ? b.consistency : null);
+        }
+        v.transient_impact = { crest3, crest30, env };
+        if (cons.some(x => x !== null)) v.transient_impact.cons = cons;
+      }
       focusOut[key] = v;
     }
     out.focus = focusOut;
@@ -162,49 +331,66 @@ function compressAnalyzeSection(r) {
   }
 
   if (r.focus_group_chains) {
+    // Keyed by GROUP name (deduped upstream): a shared bus appears once, not once per child.
+    // focus_voice_group maps each focus track → its immediate parent group so the chain stays
+    // attributable per voice.
     const fgc = {};
-    for (const [trackName, gc] of Object.entries(r.focus_group_chains)) {
-      fgc[trackName] = {
-        parent: gc.parent,
-        devices: (gc.devices || []).map(d => {
-          const o = { i: d.index, name: d.name, class: d.class_name };
-          const { native, class_inferred } = classifyDevice(d.class_name, d.name);
-          if (!native) o.native = false;
-          o.class_inferred = class_inferred;
-          if (d.is_active === false) o.off = true;
-          if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
-          // EQ filter corners inline → AI reasons about what the chain filters
-          // without a get_device_params round-trip.
-          if (d.eq_bands_active) o.eq = d.eq_bands_active;
-          return o;
-        })
-      };
+    for (const [groupName, gc] of Object.entries(r.focus_group_chains)) {
+      fgc[groupName] = { devices: (gc.devices || []).map(compactDeviceEntry) };
+      if (gc.parent) fgc[groupName].parent = gc.parent;   // enclosing group (tree pointer); absent at root
     }
     out.focus_group_chains = fgc;
+    if (r.focus_voice_group) out.focus_voice_group = r.focus_voice_group;
   }
 
   if (r.pairwise_masking) {
-    // Emit only pairs with ACTUAL masking (≥1 masked band). Complementing,
-    // non-overlapping (cooccur-gated), and all-clear pairs are dropped — absence
-    // of a pair means no significant masking between those two elements. Pairwise
-    // is O(N²) so this is the single biggest cost cut at high voice counts.
+    // Reshape per-pair band data to parallel arrays; drop worst_depth_db (= depth_db[0]
+    // after the existing sort — derived). cooccur → ordinal: 2=always/1=sometimes/0=rarely.
     const pm = {};
     for (const k of Object.keys(r.pairwise_masking)) {
       const p = r.pairwise_masking[k];
-      if (p && p.masked_bands && p.masked_bands.length > 0) pm[k] = p;
+      if (!p || !p.masked || p.masked.length === 0) continue;
+      // Pair-relevance gate: skip pairs whose DEEPEST band (masked is worst-first → masked[0]) is
+      // shallower than a loudness-halving. Mild overlap, not an actionable collision — stays in the
+      // archive (query_stored_findings 'masking', built from the raw result), so it's still pullable.
+      if (p.masked[0].depth_db > MASK_PAIR_DEPTH_DB) continue;
+      // Ship only the worst MASK_TOP_BANDS bands (masked is worst-first); the rest are
+      // in the archive. n_masked carries the true count so the AI knows how many were dropped.
+      const top = p.masked.slice(0, MASK_TOP_BANDS);
+      const hz = [], depth_db = [], cooccur = [], signal_vs_own_peak_db = [];
+      let anyBody = false;
+      for (const b of top) {
+        hz.push(b.hz);
+        depth_db.push(b.depth_db);
+        cooccur.push(b.cooccur === "always" ? 2 : b.cooccur === "sometimes" ? 1 : 0);
+        // Only ship signal_vs_own_peak_db for body bands (within a loudness-halving of own peak);
+        // tail bands → null, and the whole array is dropped when no band is in the body.
+        const sv = (b.signal_vs_own_peak_db != null && b.signal_vs_own_peak_db >= SVOP_BODY_DB)
+          ? b.signal_vs_own_peak_db : null;
+        if (sv != null) anyBody = true;
+        signal_vs_own_peak_db.push(sv);
+      }
+      const masked = { hz, depth_db, cooccur };
+      if (anyBody) masked.signal_vs_own_peak_db = signal_vs_own_peak_db;
+      pm[k] = { masked };
+      if (p.masked.length > top.length) pm[k].n_masked = p.masked.length;
     }
     if (Object.keys(pm).length > 0) out.pairwise_masking = pm;
   }
 
   if (r.phase_cancellation) {
-    // Between-element phase cancellation (Step 2). computeBetweenPhase already
-    // gates hard (presence + coherence>0.5 + cancel<−1.5dB + persistence), so any
-    // pair present here is a real, coherence-confirmed cancellation — pass through.
-    // Absence of a pair = no stable destructive interference between those two.
+    // Between-element phase cancellation. Shape: {bands:[...], delay_samples_est?}.
+    // phase_deg archived under __phase__ sessionFindings (pull for clip-nudge: (phase_deg/360)×(1000/hz) ms).
+    // Default payload: hz + cancel_db + p_value per band + delay_samples_est when present.
     const pc = {};
     for (const k of Object.keys(r.phase_cancellation)) {
       const p = r.phase_cancellation[k];
-      if (p && p.length > 0) pc[k] = p;
+      const bands = p && p.bands;
+      if (bands && bands.length > 0) {
+        const entry = { bands: bands.map(e => ({ hz: e.hz, cancel_db: e.cancel_db, p_value: e.p_value })) };
+        if (p.delay_samples_est !== undefined) entry.delay_samples_est = p.delay_samples_est;
+        pc[k] = entry;
+      }
     }
     if (Object.keys(pc).length > 0) out.phase_cancellation = pc;
   }
@@ -212,7 +398,10 @@ function compressAnalyzeSection(r) {
   if (r.reference) {
     const ref = { ...r.reference };
     delete ref.fft_meta;
-    if (ref.spectrum) ref.spectrum = compactSpectrum(ref.spectrum);
+    if (ref.spectrum) {
+      ref.spectrum = compactSpectrum(ref.spectrum);
+      delete ref.spectrum.hz;  // fixed grid in system prompt (hz-master)
+    }
     if (ref.lufs) ref.lufs = compactLufs(ref.lufs);
     compactPackPair(ref);
     dropEmpty(ref);
@@ -230,6 +419,13 @@ function compressAnalyzeSection(r) {
         if (t.kind === "return") o.return = true;
         return o;
       });
+  }
+
+  // Encode track names to short symbols; ship decode table as out.codes.
+  if (out.focus && Object.keys(out.focus).length > 0) {
+    const { codes, decode } = buildNameCodes(Object.keys(out.focus));
+    out.codes = decode;
+    applyNameCodes(out, codes);
   }
 
   return out;
@@ -276,7 +472,7 @@ function compressListTracks(r) {
 // documented semantics and the AI can reason about them.
 const NATIVE_DEVICE_CLASSES = {
   Eq8: "eq", EqThree: "eq", ChannelEq: "eq",
-  Compressor2: "comp", GlueCompressor: "comp", MultibandDynamics: "comp",
+  Compressor2: "comp", GlueCompressor: "comp", MultibandDynamics: "multiband_comp",
   Limiter: "limiter", Limiter2: "limiter",
   Gate: "gate",
   AutoFilter: "filter",
@@ -364,7 +560,7 @@ function compressTrackDevices(r) {
       if (!native) o.native = false;
       o.class_inferred = class_inferred;
       if (d.chain_path) o.chain_path = d.chain_path;
-      if (d.is_active === false) o.off = true;
+      applyDeviceState(o, d);
       if (d.can_have_chains) o.rack = true;
       if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
       if (d.eq_bands_active) o.eq = d.eq_bands_active;

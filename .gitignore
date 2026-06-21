@@ -13,6 +13,7 @@
 *.bak[0-9]*
 
 # Dev scaffolding / ground-truth logs
+debug.txt
 focus_debug.txt
 .dev_server.py
 
@@ -36,3 +37,14 @@ node_modules/
 
 # M4L device — kept local, never pushed until released
 device/
+
+# Dev-only — NOT part of the shipped AI↔M4L connection. Kept local, never pushed.
+# (The live prompt ships embedded in docs/anthropic.js; system_prompt.txt is only
+# the authoring source. Spec, changelog, setup guide, review gate, and the dev
+# guide are all local working material.)
+/CLAUDE.md
+docs/CHANGELOG.md
+docs/MIXING_SPEC.md
+docs/system_prompt.txt
+docs/OPENROUTER_SETUP.md
+docs/_review/

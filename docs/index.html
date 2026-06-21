@@ -25,8 +25,8 @@
     <button id="settings-gear" title="Settings" aria-label="Settings">⚙</button>
   </div>
   <div id="settings-menu" class="hidden">
-    <a href="#" id="settings-change">Change API key</a>
-    <a href="#" id="settings-clear">Clear API key</a>
+    <a href="#" id="settings-change">Change provider / model</a>
+    <a href="#" id="settings-clear">Clear settings</a>
   </div>
 
   <div id="messages"></div>
@@ -38,23 +38,34 @@
 
 <div id="settings-overlay" class="hidden">
   <div id="settings-card">
-    <h2>Anthropic API key</h2>
-    <p>The device sends your mix analysis to Claude. You provide your own key so usage cost stays on your account.</p>
-    <input id="settings-key-input" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+    <h2>Model provider</h2>
+    <p>Choose the model provider and enter its details.</p>
+
+    <label class="settings-field-label" for="settings-provider">Provider</label>
+    <select id="settings-provider" class="settings-input"></select>
+
+    <div id="settings-baseurl-row" class="settings-field hidden">
+      <label class="settings-field-label" for="settings-baseurl">Base URL</label>
+      <input id="settings-baseurl" class="settings-input" type="text" placeholder="https://…/v1" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div id="settings-model-row" class="settings-field hidden">
+      <label class="settings-field-label" for="settings-model">Model</label>
+      <input id="settings-model" class="settings-input" type="text" placeholder="model id" autocomplete="off" spellcheck="false">
+    </div>
+
+    <label class="settings-field-label" for="settings-key-input" id="settings-key-label">API key</label>
+    <input id="settings-key-input" class="settings-input" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+
+    <div id="settings-cors-hint" class="hidden"></div>
     <div id="settings-error"></div>
     <div id="settings-actions">
       <button id="settings-cancel" class="hidden">Cancel</button>
       <button id="settings-save">Save</button>
     </div>
     <div id="settings-help">
-      <span>Get a key from console.anthropic.com (open in your browser)</span>
-      <span> · </span>
-      <a href="#" id="settings-why">Why?</a>
+      <span id="settings-help-text">Get your key at console.anthropic.com</span>
     </div>
-    <p id="settings-why-text" class="hidden">
-      Your key is stored locally on this machine only (in jweb's localStorage), never sent anywhere except api.anthropic.com.
-      Anthropic charges your account per token used. Typical mix analysis: $0.01–0.10 per question.
-    </p>
   </div>
 </div>
 

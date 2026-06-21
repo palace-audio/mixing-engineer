@@ -70,6 +70,11 @@ export const tools = [
     input_schema: { type: "object", properties: {}, required: [] }
   },
   {
+    name: "get_sample_rate",
+    description: "Returns the live DSP sample rate: {sample_rate, expected_sample_rate:48000, matches_expected}. The device's K-weighting/LUFS windows and FFT bin→Hz mapping are calibrated for 48 kHz, so any other rate detunes every frequency and loudness number. Call this BEFORE reporting any frequency or loudness figure (spectrum/masking Hz, centroid, transient bands, LUFS/true-peak); if matches_expected is false, warn the user the numbers are affected and to switch Live to 48 kHz. Cheap; call freely.",
+    input_schema: { type: "object", properties: {}, required: [] }
+  },
+  {
     name: "get_track_routing",
     description: "Output/input routing, monitoring state, group, and all send levels (with dB display values) for one track. Use for investigating sidechain routing or send/return relationships.",
     input_schema: {
@@ -99,7 +104,7 @@ export const tools = [
   },
   {
     name: "save_memory",
-    description: "Writes/overwrites the persistent memory for this project. Memory is the project-conditioning layer — the genre/intent/references that bridge general mixing knowledge to THIS track. Save: genre, intended mood/feel, reference tracks, target loudness/dynamics goal, intentional creative choices the user wants preserved across sessions. NEVER save: implemented changes, settings applied, measurements (expire, re-queryable from Live), track lists (queryable via list_tracks), debugging notes. If the only thing you have to save is what was done in this session, don't call save_memory. HARD LIMITS: 200 chars max, 40 chars per line, 5 words per line. Comma-separated terms under one-line section headers.",
+    description: "Writes/overwrites the persistent memory for this project. Memory is the project-conditioning layer — genre, delivery platform, a reference label or track, intended mood/feel, intentional creative choices — that bridge general mixing knowledge to THIS track and are preserved across sessions. NEVER save: implemented changes, settings applied, measurements (expire, re-queryable from Live), track lists (queryable via list_tracks), debugging notes. Durable intent only; if the only thing you have to save is what was done in this session, don't call save_memory.",
     input_schema: {
       type: "object",
       properties: {
@@ -110,7 +115,7 @@ export const tools = [
   },
   {
     name: "ask_user_choice",
-    description: "Pause and ask the user to pick from concrete options when a verdict would otherwise depend on a silent assumption. Use when: user didn't name the section but multiple plausible ones exist, clip names collide within a track, the requested target is ambiguous (\"the loud part\"), or genre context is missing and a verdict would default to a convention. Pre-filter options to ones that semantically match the user's intent — show 2-4 options, max 6. If you cannot narrow to under 6, prefer a text question over a long picker. Never silently pick a convention; either ask via this tool or qualify your verdict in the response.",
+    description: "Pause and ask the user to pick from concrete options only when context can't be resolved by qualifying inline. Two cases: (1) spatial — section not named with multiple matches, clip names collide, track or locator fuzzy-match is low-confidence; (2) intent fork — intended role or delivery target, only when the two readings prescribe opposite actions. For intent-fork asks, always include one option labeled 'remember for this project'; when the user picks it, call save_memory with the resolved intent so the fork closes permanently. Pre-filter to 2–4 options; max 6. If you cannot narrow to under 6, prefer a text question.",
     input_schema: {
       type: "object",
       properties: {
@@ -134,12 +139,13 @@ export const tools = [
   },
   {
     name: "analyze_section",
-    description: "Single audio entry point for both Arrangement and Session views. Captures audio for a concrete section, then analyzes it. Active launch: pauses transport, jumps/fires the target, captures, stops. Optionally captures up to 8 focus tracks in parallel via routed taps (no soloing, no transport disruption). Optionally captures the sidechain-routed reference. Concrete starters only — pick exactly ONE of start_locator (Arrangement) OR start_scene (Session). No 'here' shortcut: if the user is ambiguous about which section, ask them via ask_user_choice instead of guessing.",
+    description: "Single audio entry point for both Arrangement and Session views. Captures audio for a section, then analyzes it. Active launch: pauses transport, jumps/fires the target, captures, stops. Optionally captures up to 8 focus tracks in parallel via routed taps (no soloing, no transport disruption). Optionally captures the sidechain-routed reference. Arrangement starter = start_locator OR start_beat; Session starter = start_scene. If NO section is given at all, defaults to 8 bars from the arrangement start (beat 0). Default capture length when no end is given is 8 bars. A vague section reference the user named but you can't resolve ('the loud part', colliding names) → ask via ask_user_choice; nothing named → just use the default.",
     input_schema: {
       type: "object",
       properties: {
-        start_locator: { type: "string", description: "Arrangement-view starter. Locator name (fuzzy matched)." },
-        end_locator: { type: "string", description: "Arrangement-view only. Optional locator name marking the end; if omitted, the next locator after start_locator is used." },
+        start_locator: { type: "string", description: "Arrangement-view starter. Locator name (case-sensitive exact match preferred, else fuzzy). If two locators share a name it is ambiguous — use start_beat instead." },
+        start_beat: { type: "number", description: "Arrangement-view starter by absolute beat (0 = arrangement start). Use to start at an exact position or to disambiguate duplicate locator names (read each one's beat from get_session_overview/locators). Alternative to start_locator." },
+        end_locator: { type: "string", description: "Arrangement-view only. Optional locator name marking the end. If omitted, capture length defaults to 8 bars from the start (NOT the next locator)." },
         start_scene: { description: "Session-view starter. Scene name (fuzzy matched) OR 1-based integer scene index. Top scene = 1.", oneOf: [{ type: "string" }, { type: "integer" }] },
         focus_clips: {
           type: "array",
@@ -153,10 +159,23 @@ export const tools = [
             required: ["track", "slot"]
           }
         },
-        bars: { type: "number", description: "Optional explicit capture length in bars. Overrides the default (Arrangement: span between locators; Session: longest clip in the scene)." },
+        bars: { type: "number", description: "Optional explicit capture length in bars. Overrides the default (Arrangement: 8 bars, or the start→end_locator span if end_locator given; Session: longest clip in the scene). Long captures are allowed." },
         beats: { type: "number", description: "Optional explicit capture length in beats. Mutually exclusive with bars." },
         focus_tracks: { type: "array", items: { type: "string" }, description: "Optional. Up to 8 track names (fuzzy matched) to analyze in parallel." },
         reference: { type: "boolean", description: "Optional. Also capture the sidechain-routed reference track." }
+      },
+      required: []
+    }
+  },
+  {
+    name: "query_stored_findings",
+    description: "Session archive lookup. After every analyze_section the device archives synthesized per-voice findings (benign + malign, including what the main response omitted) AND raw data stripped from the default payload (spectrum, time_series, phase_deg, per-band image_pos_bands — image_pos_bands under 'levels'). Call with no args for the index. aspect= filters: all / masking / transients / levels / spectrum / time_series. Two special voice keys always present after a focus capture: '__master__' returns archived master spectrum (sm + full {hz,m,sm}) and time_series; '__phase__' returns full phase_cancellation WITH phase_deg — use it for clip-nudge math: (phase_deg/360) × (1000/hz_center) ms. Batch form: pass queries=[{voice?,aspect?}] to fetch multiple voice/aspect pairs in one call; returns {\"voice:aspect\": result}. Single-call form (voice+aspect) also kept. Cache wiped each new capture; no_data → re-run analyze_section.",
+    input_schema: {
+      type: "object",
+      properties: {
+        voice: { type: "string", description: "Track name or '__master__' or '__phase__'. Omit to return the index." },
+        aspect: { type: "string", enum: ["all", "masking", "transients", "levels", "spectrum", "time_series"], description: "Return only a sub-section. Default: all." },
+        queries: { type: "array", items: { type: "object", properties: { voice: { type: "string" }, aspect: { type: "string", enum: ["all", "masking", "transients", "levels", "spectrum", "time_series"] } }, required: [] }, description: "Batch form: array of {voice?, aspect?} pairs. Returns object keyed by 'voice:aspect'." }
       },
       required: []
     }
@@ -185,9 +204,14 @@ function editDistance(a, b) {
 
 function fuzzyResolve(candidate, knownNames) {
   if (!candidate || !knownNames || !knownNames.length) return null;
-  const lower = candidate.toLowerCase().trim();
+  const cand = String(candidate).trim();
+  // Case-SENSITIVE exact match first — distinguishes "DROP" from "drop" when both
+  // exist (lowercasing first would collapse them and always pick whichever sorts first).
+  let i = knownNames.findIndex(n => n === cand);
+  if (i !== -1) return knownNames[i];
+  const lower = cand.toLowerCase();
   const lowerNames = knownNames.map(n => (n || "").toLowerCase());
-  let i = lowerNames.findIndex(n => n === lower);
+  i = lowerNames.findIndex(n => n === lower);
   if (i !== -1) return knownNames[i];
   i = lowerNames.findIndex(n => n.includes(lower) || lower.includes(n));
   if (i !== -1) return knownNames[i];
@@ -231,6 +255,8 @@ export async function runTool(name, input) {
     }
     case "get_session_overview":
       return await query("get_session_overview");
+    case "get_sample_rate":
+      return await query("get_sample_rate");
     case "get_track_routing": {
       const idx = await trackIndexByName(input.track_name);
       if (idx === null) return { error: `No track named "${input.track_name}".` };
@@ -247,33 +273,27 @@ export async function runTool(name, input) {
       return await readMemory();
     case "save_memory": {
       const content = input.content || "";
-      if (content.length > 200) return { ok: false, error: `memory exceeds 200 chars (got ${content.length}). vibe + intent only — genre, mood, references, target loudness. NO implemented changes, NO measurements, NO track lists.` };
-      const lines = content.split("\n");
-      for (const line of lines) {
-        if (line.length > 40) return { ok: false, error: `line exceeds 40 chars: "${line.slice(0, 8)}...". key terms only.` };
-        const wordCount = line.trim().split(/\s+/).length;
-        if (wordCount > 5) return { ok: false, error: `line has ${wordCount} words: "${line.slice(0, 8)}...". max 5 words per line.` };
-      }
       return await writeMemory(content);
     }
     case "analyze_section": {
-      // Mode resolution: exactly one of start_locator (Arrangement) or
-      // start_scene (Session) is required. focus_clips implies Session mode and
-      // overrides whatever start_scene resolves the section to.
+      // Mode resolution. Arrangement starter = start_locator OR start_beat; Session
+      // starter = start_scene / focus_clips. If nothing concrete is named, default to
+      // 8 bars from the arrangement start (beat 0) instead of erroring.
       const hasLocator = input.start_locator != null && String(input.start_locator).trim().length > 0;
+      const hasStartBeat = input.start_beat != null && !isNaN(Number(input.start_beat));
       const hasScene = input.start_scene != null && String(input.start_scene).trim().length > 0;
       const focusClipsArg = Array.isArray(input.focus_clips) ? input.focus_clips.slice(0, 8) : [];
       const hasFocusClips = focusClipsArg.length > 0;
-      if (!hasLocator && !hasScene && !hasFocusClips) {
-        return { error: "ambiguous section — pass start_locator (Arrangement) OR start_scene (Session) OR focus_clips. Use ask_user_choice if the user wasn't specific." };
-      }
-      if (hasLocator && hasScene) {
-        return { error: "pass start_locator OR start_scene, not both" };
+      if ((hasLocator || hasStartBeat) && hasScene) {
+        return { error: "pass an Arrangement starter (start_locator/start_beat) OR start_scene, not both" };
       }
 
       const focusTracks = (input.focus_tracks || []).slice(0, 8);
       const includeReference = !!input.reference;
       const sessionMode = hasScene || hasFocusClips;
+      // Arrangement is the default whenever Session wasn't requested.
+      const arrangementMode = !sessionMode;
+      const DEFAULT_CAPTURE_BARS = 8;
 
       // Read tempo + signature once — both modes need them for bars/beats math.
       const overview = await query("get_session_overview");
@@ -289,35 +309,51 @@ export async function runTool(name, input) {
       if (input.bars != null) overrideSec = Number(input.bars) * sigNum * 60 / tempo;
       else if (input.beats != null) overrideSec = Number(input.beats) * 60 / tempo;
 
-      let startLoc = null, endLoc = null, sec = 0;
+      // Default capture length = 8 bars. Explicit bars/beats or an end_locator override it;
+      // there is no infinite default (a missing end no longer records until the user stops).
+      const defaultSec = DEFAULT_CAPTURE_BARS * sigNum * 60 / tempo;
+
+      // Arrangement start descriptor: the beat to seek to, an optional cue index (a named
+      // locator can use the cheaper exact jump_to_cue), and a human label for the result.
+      let startBeatVal = 0, startCueIndex = null, startLabel = null, endLoc = null, sec = 0;
       let sceneIdx = -1, sceneLabel = null;
       let resolvedFocusClips = [];
 
-      if (hasLocator) {
-        const locData = await query("get_locators");
-        if (!locData || !locData.locators || !locData.locators.length) return { error: "no locators found in the Live set" };
-        const sorted = locData.locators.slice().sort((a, b) => a.time_beat - b.time_beat);
-        const locNames = sorted.map(l => l.name || "");
-        const resolvedStart = fuzzyResolve(input.start_locator, locNames);
-        const startIdx = resolvedStart ? sorted.findIndex(l => l.name === resolvedStart) : -1;
-        if (startIdx === -1) return { error: `locator '${input.start_locator}' not found. Available: ${locNames.join(", ")}` };
-        startLoc = sorted[startIdx];
-        if (input.end_locator) {
-          const resolvedEnd = fuzzyResolve(input.end_locator, locNames);
-          endLoc = resolvedEnd ? sorted.find(l => l.name === resolvedEnd) : null;
-          if (!endLoc) return { error: `end_locator '${input.end_locator}' not found. Available: ${locNames.join(", ")}` };
-          if (endLoc.time_beat <= startLoc.time_beat) return { error: `end_locator at or before start_locator` };
-        } else if (overrideSec == null && focusTracks.length === 0) {
-          // Master-only: span to next locator (longer captures fine, no per-voice buffers).
-          endLoc = sorted[startIdx + 1];
-          if (!endLoc) return { error: `no locator after '${input.start_locator}' — pass end_locator OR bars/beats explicitly` };
+      if (arrangementMode) {
+        if (hasLocator) {
+          const locData = await query("get_locators");
+          if (!locData || !locData.locators || !locData.locators.length) return { error: "no locators found — pass start_beat instead" };
+          const sorted = locData.locators.slice().sort((a, b) => a.time_beat - b.time_beat);
+          const locNames = sorted.map(l => l.name || "");
+          const resolvedStart = fuzzyResolve(input.start_locator, locNames);
+          // Duplicate-name guard: if the resolved name matches more than one locator it is
+          // genuinely ambiguous (e.g. two "DROP"s) — surface their beats so the AI re-calls with start_beat.
+          const matches = resolvedStart ? sorted.filter(l => l.name === resolvedStart) : [];
+          if (matches.length === 0) return { error: `locator '${input.start_locator}' not found. Available: ${locNames.join(", ")}` };
+          if (matches.length > 1) {
+            const positions = matches.map(m => `beat ${m.time_beat}`).join(", ");
+            return { error: `locator '${resolvedStart}' is ambiguous — ${matches.length} locators share that name (at ${positions}). Pass start_beat to pick one.` };
+          }
+          startBeatVal = matches[0].time_beat;
+          startCueIndex = matches[0].cue_index;
+          startLabel = matches[0].name;
+          if (input.end_locator) {
+            const resolvedEnd = fuzzyResolve(input.end_locator, locNames);
+            endLoc = resolvedEnd ? sorted.find(l => l.name === resolvedEnd && l.time_beat > startBeatVal) : null;
+            if (!endLoc) return { error: `end_locator '${input.end_locator}' not found after the start. Available: ${locNames.join(", ")}` };
+            const span = (endLoc.time_beat - startBeatVal) * 60 / tempo;
+            sec = overrideSec != null ? Math.min(span, overrideSec) : span;
+          } else {
+            // No end → default 8 bars from the start (NOT span-to-next-locator, NOT infinite).
+            sec = overrideSec != null ? overrideSec : defaultSec;
+          }
+        } else {
+          // Explicit start_beat, or nothing named → 8 bars from the arrangement start (beat 0).
+          startBeatVal = hasStartBeat ? Number(input.start_beat) : 0;
+          startCueIndex = null;
+          startLabel = hasStartBeat ? `beat ${startBeatVal}` : "arrangement start";
+          sec = overrideSec != null ? overrideSec : defaultSec;
         }
-        // Focus captures default to 8 bars max — per-voice buffer accumulation
-        // degrades on long sections. User can override with bars= or beats=.
-        // Master-only captures use the full locator span.
-        const focusCapSec = focusTracks.length > 0 ? 8 * sigNum * 60 / tempo : Infinity;
-        const locatorSpan = endLoc ? (endLoc.time_beat - startLoc.time_beat) * 60 / tempo : focusCapSec;
-        sec = overrideSec != null ? Math.min(locatorSpan, overrideSec) : Math.min(locatorSpan, focusCapSec);
       } else if (hasScene) {
         // Resolve scene by name OR 1-based integer. Live's API is 0-based,
         // so we subtract 1 after resolution.
@@ -389,8 +425,10 @@ export async function runTool(name, input) {
         await query("call_transport", "stop_playing");
         await new Promise(r => setTimeout(r, 80));
 
-        if (hasLocator) {
-          await query("jump_to_cue", startLoc.cue_index);
+        if (arrangementMode) {
+          // Named locator → exact jump_to_cue; otherwise seek the playhead to the beat.
+          if (startCueIndex != null) await query("jump_to_cue", startCueIndex);
+          else await query("set_transport", "current_song_time", startBeatVal);
           await new Promise(r => setTimeout(r, 50));
         } else if (hasScene) {
           await query("fire_scene", sceneIdx);
@@ -404,7 +442,8 @@ export async function runTool(name, input) {
 
         await query("call_transport", "start_playing");
         await new Promise(r => setTimeout(r, 200));
-        await query("start_record");
+        const ctxLabel = arrangementMode ? startLabel : (hasScene ? sceneLabel : "clips");
+        await query("start_record", ctxLabel);
         // Poll transport every 500ms instead of one big sleep. If the user
         // stops playback mid-capture, abort immediately rather than burning
         // the full capture window and sending a partial result to the API.
@@ -421,7 +460,9 @@ export async function runTool(name, input) {
         }
         await query("stop_record");
         if (cancelled) {
-          return { error: "capture_cancelled", message: "Transport stopped before capture completed. Re-run when ready." };
+          // The user stopped transport mid-capture. Report it and stop — do NOT
+          // restart the capture (no "re-run" hint; auto-restarting on stop was a bug).
+          return { status: "capture_stopped", message: "Transport was stopped during recording, so the capture is stopped. Nothing was analyzed. Tell the user the capture is stopped; do not re-run unless they ask." };
         }
         await query("call_transport", "stop_playing");
         // Session-mode captures touched session state (fire_scene / fire_clip
@@ -443,11 +484,11 @@ export async function runTool(name, input) {
         if (master) delete master.fft_calibration_db;
 
         let sectionInfo;
-        if (hasLocator) {
+        if (arrangementMode) {
           sectionInfo = {
-            start: startLoc.name,
+            start: startLabel,
             duration_seconds: Math.round(sec * 10) / 10,
-            start_beat: startLoc.time_beat,
+            start_beat: startBeatVal,
             ...(endLoc ? { end: endLoc.name, end_beat: endLoc.time_beat } : {})
           };
         } else if (hasScene) {
@@ -467,10 +508,29 @@ export async function runTool(name, input) {
           // surfaces it as focus_diagnostic. Without this line it was dropped,
           // making every focus-tap diagnostic blind.
           if (focus && focus.diagnostic) result.focus.diagnostic = focus.diagnostic;
+          // Fresh per-capture mute/solo state — attached ONLY when abnormal (muted / muted-by-solo),
+          // so a normal track adds zero bytes. Reuses the list_tracks already fetched above: no new
+          // query, no payload growth in the common case. Grounds the model on THIS capture's state
+          // instead of a stale earlier list_tracks (B5).
+          const anySolo = (allTracksRes?.tracks || []).some(t => t.solo);
           if (focus && focus.voices) {
             for (let i = 0; i < resolvedFocus.length; i++) {
               const v = focus.voices[i + 1];
-              if (v) result.focus[resolvedFocus[i]] = v;
+              if (!v) continue;
+              const trackIdx = allTrackNames.indexOf(resolvedFocus[i]);
+              const tEntry = (allTracksRes?.tracks || [])[trackIdx];
+              if (tEntry) {
+                if (tEntry.mute) v.track_state = "muted";
+                else if (anySolo && !tEntry.solo) v.track_state = "muted_via_solo";
+              }
+              // The focus tap is post-this-track's-own-devices (pre-group-chain), so that
+              // chain is what shaped the signal. It is NOT folded into the capture anymore:
+              // shipping it per voice on every capture cost tokens and fed device-first
+              // reasoning. The AI pulls get_track_devices FRESH (live, current) only when a
+              // finding implicates a device — same on-demand discipline as get_device_params.
+              // (The parent group chain stays in focus_group_chains — post-tap, harder to
+              // derive, and a caveat the AI can't reconstruct from a later query.)
+              result.focus[resolvedFocus[i]] = v;
             }
           }
           if (focus && focus.pairwise_masking) result.pairwise_masking = focus.pairwise_masking;
@@ -480,14 +540,33 @@ export async function runTool(name, input) {
           // For grouped focus tracks, auto-fetch parent group device chain.
           // The focus tap captures child Post Mixer (pre-group-chain); exposing
           // the group devices lets the AI caveat its spectral analysis correctly.
-          const groupChains = {};
+          // Walk each focused child UP its bus tree to the root. Each unique group is captured ONCE
+          // (deduped) with a `parent` pointer to its enclosing group, so the map is the full
+          // child→…→master tree, not just one level — a grandparent bus (e.g. a CLIP group above
+          // KICKBASS) is no longer invisible. getGroupChain(X) returns X's immediate parent group +
+          // that parent's devices ("a group is also a track"), so feeding the parent back in climbs one
+          // level; stop when a node has no parent group, or when the parent is already mapped (dedup).
+          const groupChains = {};   // group name → { devices, parent? }
+          const voiceGroup = {};    // focus track → its immediate parent group
           for (const trackName of resolvedFocus) {
-            const gc = await query("get_group_chain", trackName);
-            if (gc && gc.grouped && gc.parent) {
-              groupChains[trackName] = { parent: gc.parent, devices: gc.devices || [] };
+            let node = trackName, isVoice = true;
+            while (true) {
+              const gc = await query("get_group_chain", node);
+              if (!gc || !gc.grouped || !gc.parent) break;   // node is top-level (directly under master)
+              const parent = gc.parent;
+              if (isVoice) voiceGroup[trackName] = parent;
+              else if (groupChains[node]) groupChains[node].parent = parent;  // node is a group → record its parent
+              const seen = !!groupChains[parent];
+              if (!seen) groupChains[parent] = { devices: gc.devices || [] };
+              node = parent;
+              isVoice = false;
+              if (seen) break;   // parent + its ancestry already mapped — stop climbing
             }
           }
-          if (Object.keys(groupChains).length > 0) result.focus_group_chains = groupChains;
+          if (Object.keys(groupChains).length > 0) {
+            result.focus_group_chains = groupChains;
+            result.focus_voice_group = voiceGroup;
+          }
         }
 
         if (includeReference) {
@@ -507,6 +586,17 @@ export async function runTool(name, input) {
           await query("session_to_arrangement");
         }
       }
+    }
+    case "query_stored_findings": {
+      if (input.queries && Array.isArray(input.queries)) {
+        const results = {};
+        for (const q of input.queries) {
+          results[`${q.voice || "index"}:${q.aspect || "all"}`] =
+            await query("query_stored_findings", q.voice || null, q.aspect || "all");
+        }
+        return results;
+      }
+      return await query("query_stored_findings", input.voice || null, input.aspect || "all");
     }
     default:
       return { error: `Unknown tool: ${name}` };
