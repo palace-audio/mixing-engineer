@@ -20,7 +20,7 @@ I purposefully limited my tool to be purely advisory and did not give it any edi
 
 ## How to use it
 
-Open the chat panel and ask in plain language. There's no syntax to learn — talk to it the way you'd talk to another producer. The device picks the right tools and answers from actual measurements.
+Open the chat panel and talk to it the way you'd talk to another producer. The device picks the right tools and answers back from actual measurements.
 
 The chat keeps full conversation history within a session, so you can ask follow-up questions, push back on an earlier verdict, or move between tracks freely. You can also ask general mixing questions that don't require a measurement — the device draws on standard mixing knowledge for those.
 
@@ -54,19 +54,19 @@ The chat keeps full conversation history within a session, so you can ask follow
 
 ## Choosing a model
 
-You supply the AI model that does the analysis, so any cost lands on your account, not someone else's. Open settings (⚙) and pick a provider:
+You supply the AI model that does the analysis. Open settings (⚙) and pick a provider:
 
-- **Anthropic (Claude)** — paste a key from console.anthropic.com (`sk-ant-…`). Sharpest analysis.
-- **OpenRouter** — one key for many cloud models; the path when your machine can't run a large model locally.
-- **Local (Ollama / LM Studio)** — runs on your own machine: free per question, no key, but needs a capable model and the RAM to hold it.
+- **Anthropic (Claude)** — Default is the newest Opus model.
+- **OpenRouter** — one key for many cloud models, Deepseek-v4-flash is recommended for cost/efficiency.
+- **Local (Ollama / LM Studio)** — runs on your own machine: free per question.
 
-The running cost — or **free**, for local — shows in the corner of the chat panel.
+- The running cost, alongside token usage, shows in the corner of the chat panel.
 
 ## Privacy and cost
 
-- **Your API key is stored on your computer only**, in this device's local browser storage as plain text — the trade-off for a bring-your-own-key tool that runs with no server of its own. It never leaves your machine except to call your chosen provider directly. To remove it, clear the device's settings, or use a local provider (Ollama / LM Studio), which needs no key at all.
-- **Audio is summarized into numbers before being sent.** The model sees frequency balance, peak levels, and the like — never the raw audio.
-- **You pay your provider directly**, or nothing if you run a local model. No subscription to anyone else.
+- **Your API key is stored on your computer only**, in this device's local browser storage as plain text. It never leaves your machine except to call your chosen provider directly. To remove it, clear the device's settings.
+- **You pay your provider directly**, or nothing if you run a local model.
+
 
 ## Project memory
 
@@ -74,14 +74,14 @@ Each Live set you use the device with has its own small memory note. The device 
 
 ## Troubleshooting
 
-- **Chat panel is blank.** The device couldn't reach the UI hosted on GitHub Pages. Check your internet connection. If you're offline, the device won't work — the UI is fetched fresh each time.
+- **Chat panel is blank.** The device couldn't reach the UI hosted on GitHub Pages. Check your internet connection. If you're offline, the device won't work (WIP)
 - **Status stays red / "Offline".** Click the gear icon top-right, pick your provider, and enter its key.
-- **Responses time out.** Open Max Console in Ableton (View → Max Window) and look for red errors. Most often this is the device losing its connection to the Live set — close the set and reopen.
+- **Responses time out.** Most often this is the device losing its connection to the Live set — close the set and reopen. It could also be an AI provider timing out - try repeating your question, or tell the AI you never got an answer.
 
 ## License
 
-Proprietary — all rights reserved. See [LICENSE](LICENSE). The source is public so the device can run (its interface is served from this repository) and for transparency, but it is **not** open source: you may not copy, clone, fork, reuse, redistribute, modify, or monetize the code or its prompts without written permission.
+Proprietary — all rights reserved. See [LICENSE](LICENSE). The source is public for transparency and educational purposes, but it is **not** open source: you may not copy, clone, fork, reuse, redistribute, modify, or monetize the code or its prompts without written permission.
 
 ## Credits
 
-Built by Alp Isbir. Powered by Claude (Anthropic) or any OpenAI-compatible model. Uses Max for Live (Ableton + Cycling '74).
+Built by Alp Isbir. Powered by artificial intelligence. Uses Max for Live (Ableton + Cycling '74).
