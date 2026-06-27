@@ -1,6 +1,6 @@
 #  Mixing Engineer by Palace Audio
 
-A Max for Live device that listens to your mix and answers questions about it. Drop it on the master track, ask it what's going on, get specific feedback grounded in actual measurements of your audio — frequency balance, dynamics, masking, loudness, the works.
+A mixing engineer for Max for Live: ask it anything about your mix and it answers, grounded in signal analysis. Drop it on the master track and get specific feedback — frequency balance, dynamics, masking, loudness, the works.
 
 It's not a replacement for your ears — it's an experienced second opinion, always there on your shoulder.
 
