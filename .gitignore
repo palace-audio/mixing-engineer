@@ -43,7 +43,6 @@ device/
 # the authoring source. Spec, changelog, setup guide, review gate, and the dev
 # guide are all local working material.)
 /CLAUDE.md
-/TESTER_GUIDE.md
 docs/CHANGELOG.md
 docs/MIXING_SPEC.md
 docs/system_prompt.txt
