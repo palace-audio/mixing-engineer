@@ -2,7 +2,7 @@
 
 A Max for Live device that listens to your mix and answers questions about it. Drop it on the master track, ask it what's going on, get specific feedback grounded in actual measurements of your audio — frequency balance, dynamics, masking, loudness, the works.
 
-It's not a replacement for ears. It's a second opinion you can ask things like "is the kick fighting the bass in the drop?" or "does my mix sound finished?" — and it'll tell you, with numbers.
+It's not a replacement for your ears — it's an experienced second opinion, always there on your shoulder.
 
 ## Rationale and Philosophy
 
@@ -24,27 +24,39 @@ Open the chat panel and talk to it the way you'd talk to another producer. The d
 
 The chat keeps full conversation history within a session, so you can ask follow-up questions, push back on an earlier verdict, or move between tracks freely. You can also ask general mixing questions that don't require a measurement — the device draws on standard mixing knowledge for those.
 
+## Getting the best out of it
+
+**Set the intent.** It asks for genre, references, and target loudness the first time you open it on a project; after that, just say what each element is meant to do as you go and it tracks it.
+
+**Name tracks for what they are.** Clear track names (kick, sub, lead vocal) keep it from misreading what it's looking at.
+
+**Ask specific questions.** A precise question about a band, an element, or a moment beats "is this good?"
+
+**Push back.** If a verdict doesn't sit right, ask how it got there.
+
 ## Functionality
 
-**Listen to a section.** Captures audio between any two locators (or ten seconds from the playhead) and reports frequency balance, peak and RMS levels, integrated LUFS, true peak, dynamic range, stereo correlation, and a per-second spectrum and energy timeline.
+**Listen to a section.** Captures any part of your mix — a section between two locators, or a default window from the playhead — for analysis.
 
-**Inspect specific tracks.** Name up to eight tracks and the device taps each in parallel — full spectrum, RMS over time, active automation, and live gain reduction from compressors and limiters.
+**Inspect specific tracks.** Name up to eight tracks and it analyzes each one individually, in parallel.
 
-**Diagnose masking and sidechain.** Cross-checks spectral overlap against temporal energy correlation to distinguish masking (two tracks loud together in overlapping bands) from sidechain ducking (anti-correlated energy), and reports each duck's depth and recovery.
+**Frequency balance.** Reads the tonal balance across the spectrum and the resonant peaks that stand out from it.
 
-**Check stereo, phase, and mono compatibility.** Measures each track's stereo image and width, flags phase cancellation between elements (the usual culprit behind a weak low end when kick and sub fight), and tests how the mix survives summed to mono.
+**Dynamics.** Measures dynamic range, transient attack, and decay.
 
-**Catch transients and resonances.** Reports per-band onset density and decay times — punchy vs. sustained — and flags ringing resonances anywhere in the spectrum, with no fixed "harsh" band.
+**Masking.** Identifies where two elements compete in the same frequency range, and how much one covers the other.
 
-**Read device chains.** Walks every device on every track, including nested chains inside Effect Racks. Reports what each chain is doing audibly — which EQ bands are doing work, where a compressor is actually pulling, whether a saturator's dry/wet renders it inaudible.
+**Stereo, phase, and mono.** Measures each element's stereo width and placement, detects phase cancellation between elements, and tests how the mix holds up summed to mono.
 
-**Compare to a reference.** Select a reference track and ask how your mix differs from it — comparison is loudness-normalized, so it's content, not level.
+**Read device chains.** Walks every device on every track, including nested racks, and reports what each one is doing to the signal.
 
-**Mix vs. master state awareness.** Detects whether your mix is still in progress or already mastered from integrated LUFS, true peak headroom, and crest factor.
+**Compare to a reference.** Pick a reference track and compare your mix against it.
 
-**Per-project memory.** Holds the intent of the track: genre, mood, references, target loudness. The device reads this at the start of each session.
+**Loudness and headroom.** Measures integrated loudness and true peak.
 
-**What it won't do.** Make changes for you. Confirm what you already think. Replace your ears.
+**Per-project memory.** Remembers each project's genre, references, and target loudness, and what each element is meant to do.
+
+**More than a meter.** Any plugin can show you these numbers. Here they power an AI — which is what makes it a mixing engineer.
 
 ## Installation
 
@@ -70,7 +82,7 @@ You supply the AI model that does the analysis. Open settings (⚙) and pick a p
 
 ## Project memory
 
-Each Live set you use the device with has its own small memory note. The device uses it to remember the *vibe and intent* of the track — genre, mood, references, the loudness you're aiming for. It does **not** remember what changes were made or what was measured (those expire). The memory travels with the Live set's name on this machine; it doesn't follow the set to other computers.
+Each Live set gets its own memory note, stored on this machine — it travels with the set's folder but doesn't follow it to another computer. It holds the track's intent only; the changes you made or the numbers it measured expire each session.
 
 ## Troubleshooting
 
