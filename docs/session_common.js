@@ -33,7 +33,11 @@ export async function dispatchToolCall(name, input, { onToolStart, onAskUserChoi
       try {
         picked = await onAskUserChoice(q, opts);
       } catch (e) {
-        picked = "";
+        // The picker UI itself failed — surface that instead of fabricating a
+        // user answer. "(no selection)" would tell the model the user chose
+        // nothing (a real answer); an error tells it the question never reached
+        // the user, so it should resolve the ambiguity another way or ask again.
+        return { content: `ERROR: could not present the choice to the user (${e && e.message ? e.message : e}). The question did not reach them — do not treat this as a decision; resolve the ambiguity from context or ask again.`, decayable: false, isMemory: false };
       }
     }
     return { content: picked || "(no selection)", decayable: false, isMemory: false };

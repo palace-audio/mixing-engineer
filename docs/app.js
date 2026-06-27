@@ -1,6 +1,28 @@
-import { ClaudeSession } from "./anthropic.js";
-import { OpenAICompatSession } from "./openai.js";
+// Provider sessions are loaded lazily (dynamic import in initSession) so picking a
+// local/OpenRouter model never evaluates anthropic.js — which is the only module that
+// pulls the Anthropic SDK from esm.sh. See loadSessionClass below.
 import { query } from "./max_bridge.js";
+
+// Config persists to a project-adjacent file (mixingengineer_config.json next to the
+// .als) so it survives localStorage clears (cache wipes, Max updates, project moves).
+// localStorage is still written on save for fast synchronous reads; the file is the
+// durable fallback. Storing the API key to a local file has the same security posture
+// as localStorage — cleartext, local only.
+async function readConfigFromFile() {
+  try {
+    const r = await query("read_config_file");
+    if (r && r.content) {
+      const cfg = JSON.parse(r.content);
+      if (cfg && cfg.provider) return cfg;
+    }
+  } catch { }
+  return null;
+}
+
+async function saveConfigToFile(cfg) {
+  try { await query("write_config_file", encodeURIComponent(JSON.stringify(cfg || {}))); }
+  catch { }
+}
 import { mountSettings, getStoredConfig } from "./settings.js";
 import { runTool } from "./tools.js";
 
@@ -355,7 +377,17 @@ async function loadInitialMemory() {
   else renderOpener(r?.content || "", false);
 }
 
-function initSession(config) {
+// Load only the session class the chosen provider needs. anthropic.js carries the
+// Anthropic SDK (esm.sh) and its Haiku extraction path; the local/OpenRouter path
+// must never trigger that fetch, so the import is dynamic and provider-gated.
+async function loadSessionClass(provider) {
+  if (provider === "anthropic") {
+    return (await import("./anthropic.js")).ClaudeSession;
+  }
+  return (await import("./openai.js")).OpenAICompatSession;
+}
+
+async function initSession(config) {
   const callbacks = {
     onText: (delta) => {
       hideThinking();
@@ -402,9 +434,10 @@ function initSession(config) {
     }
   };
   // Same callback contract for either provider; the config decides the class.
+  const SessionClass = await loadSessionClass(config.provider);
   session = config.provider === "anthropic"
-    ? new ClaudeSession({ apiKey: config.apiKey, ...callbacks })
-    : new OpenAICompatSession({ ...config, ...callbacks });
+    ? new SessionClass({ apiKey: config.apiKey, ...callbacks })
+    : new SessionClass({ ...config, ...callbacks });
   costMode = LOCAL_PROVIDERS.has(config.provider) ? "free"
     : COST_TRACKED_PROVIDERS.has(config.provider) ? "usd"
     : "untracked";
@@ -446,23 +479,28 @@ inputEl.addEventListener("keydown", (e) => {
 
 const settings = mountSettings({
   onSaved: (config) => {
+    saveConfigToFile(config);  // durable file backup (fire-and-forget; localStorage already written)
     initSession(config);
     if (messagesEl.children.length === 0) loadInitialMemory();
   },
   onCleared: () => {
+    saveConfigToFile({});  // clear the file too (empty object → next boot reads null)
     session = null;
     setStatus(false);
     clearChat();
   }
 });
 
-// getStoredConfig migrates any legacy Anthropic-only key, so existing users
-// boot straight into the same Anthropic session with no re-entry.
-const storedConfig = getStoredConfig();
-if (storedConfig) {
-  initSession(storedConfig);
-  loadInitialMemory();
-} else {
-  setStatus(false);
-  settings.showOverlay();
-}
+// Boot: localStorage first (fast sync), then file fallback (survives localStorage clears).
+// getStoredConfig migrates any legacy Anthropic-only key on first read.
+(async () => {
+  let storedConfig = getStoredConfig();
+  if (!storedConfig) storedConfig = await readConfigFromFile();
+  if (storedConfig) {
+    initSession(storedConfig);
+    loadInitialMemory();
+  } else {
+    setStatus(false);
+    settings.showOverlay();
+  }
+})();

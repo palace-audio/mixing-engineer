@@ -1,4 +1,4 @@
-import { SYSTEM_PROMPT } from "./anthropic.js";
+import { SYSTEM_PROMPT } from "./prompt.js";
 import { tools } from "./tools.js";
 import { dispatchToolCall } from "./session_common.js";
 
@@ -293,7 +293,20 @@ export class OpenAICompatSession {
   // call — even a malformed one — is answered with a role:"tool" message so none
   // is left dangling, then we loop; a turn with no tool calls is the answer.
   async _runLoop() {
+    // Dual guard against a runaway tool loop — same design as ClaudeSession.
+    // PRIMARY: an identical tool call (same name + args) repeated within one send
+    // is non-progressing → feed back an error so the model stops and answers.
+    // BACKSTOP: a hard ceiling at ~2x the deepest legitimate analysis. A weak
+    // local/OpenRouter model is the likeliest to loop, so this matters most here.
+    const MAX_TOOL_ROUNDS = 30;
+    const seenToolCalls = new Set();
+    let toolRounds = 0;
     while (true) {
+      if (++toolRounds > MAX_TOOL_ROUNDS) {
+        this.onError?.(`Stopped after ${MAX_TOOL_ROUNDS} tool rounds — the model may be stuck in a loop. The work above is what completed.`);
+        this.onDone?.();
+        return;
+      }
       let result = this.stream ? await this._completeStream() : await this._completeOnce();
 
       // Auto-fallback: a streaming server garbled the tool-calls. Re-run this
@@ -324,11 +337,28 @@ export class OpenAICompatSession {
 
       for (const tc of toolCalls) {
         const name = (tc.function && tc.function.name) || "";
+        const rawArgs = (tc.function && tc.function.arguments) || "";
         let input = {};
-        const rawArgs = tc.function && tc.function.arguments;
-        if (rawArgs) {
-          try { input = JSON.parse(rawArgs); } catch (e) { input = {}; }
+        if (rawArgs.trim()) {
+          try {
+            input = JSON.parse(rawArgs);
+          } catch (e) {
+            // Don't silently run the tool with empty args (the old fallback) —
+            // that degrades a parse failure into a wrong, argument-less call.
+            // Tell the model its arguments were malformed so it can re-emit them.
+            this.messages.push({ role: "tool", tool_call_id: tc.id,
+              content: `ERROR: could not parse the arguments for ${name} as JSON. You sent: ${rawArgs.slice(0, 200)}. Re-call ${name} with valid JSON arguments.` });
+            continue;
+          }
         }
+        // Identical-call loop guard (ask_user_choice exempt — interactive).
+        const sig = name !== "ask_user_choice" ? name + ":" + JSON.stringify(input) : null;
+        if (sig && seenToolCalls.has(sig)) {
+          this.messages.push({ role: "tool", tool_call_id: tc.id,
+            content: `ERROR: you already called ${name} with these exact arguments this turn; the result is unchanged. Do not repeat it — answer from the data you already have, or take a different action.` });
+          continue;
+        }
+        if (sig) seenToolCalls.add(sig);
         const { content } = await dispatchToolCall(name, input, {
           onToolStart: this.onToolStart,
           onAskUserChoice: this.onAskUserChoice

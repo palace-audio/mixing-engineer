@@ -1,34 +1,51 @@
 import { query } from "./max_bridge.js";
 
-const MEMORY_KEY_PREFIX = "mixingengineer_memory:";
-
-async function getMemoryStorageKey() {
-  const r = await query("get_project_path");
-  const path = (r && r.path) || "";
-  if (!path) return null;
-  return MEMORY_KEY_PREFIX + path;
-}
+// Legacy key prefix — used only for one-time migration of existing localStorage entries.
+const LEGACY_MEMORY_PREFIX = "mixingengineer_memory:";
 
 async function readMemory() {
-  const key = await getMemoryStorageKey();
-  if (!key) return { content: "", noProject: true, note: "Live set unsaved — save the set first to enable memory." };
-  try {
-    const content = localStorage.getItem(key) || "";
-    return { content, key };
-  } catch (e) {
-    return { content: "", error: "localStorage read failed: " + e.message };
+  const r = await query("read_memory_file");
+  if (r && r.noProject) return { content: "", noProject: true, note: "Live set unsaved — save the set first to enable memory." };
+  if (r && r.error && !r.content) return { content: "", error: r.error };
+  let content = (r && r.content) || "";
+  // One-time migration: if the file is empty, check localStorage for a legacy entry
+  // and promote it to file storage so the next read finds it in the file.
+  if (!content && r && r.project_path) {
+    try {
+      const legacyKey = LEGACY_MEMORY_PREFIX + r.project_path;
+      const legacy = localStorage.getItem(legacyKey) || "";
+      if (legacy) {
+        content = legacy;
+        await query("write_memory_file", encodeURIComponent(legacy));
+      }
+    } catch (e) {}
   }
+  return { content, key: r && (r.mem_file || r.project_path) };
 }
 
 async function writeMemory(content) {
-  const key = await getMemoryStorageKey();
-  if (!key) return { ok: false, error: "Live set unsaved — save the set first to enable memory." };
-  try {
-    localStorage.setItem(key, content);
-    return { ok: true, key, bytes: content.length };
-  } catch (e) {
-    return { ok: false, error: "localStorage write failed: " + e.message };
-  }
+  const r = await query("write_memory_file", encodeURIComponent(content));
+  if (r && r.noProject) return { ok: false, error: "Live set unsaved — save the set first to enable memory." };
+  if (!r) return { ok: false, error: "No response from write_memory_file" };
+  return r;
+}
+
+// The intent log — a second persistent store next to the .als, separate from memory.
+// Same file plumbing as memory (read/modify/write the whole text), different policy:
+// memory is the deliberate, curated project identity; this is the running, provisional
+// record of what the user wants each element to do ("the mixing intent gathered so far").
+async function readIntent() {
+  const r = await query("read_intent_file");
+  if (r && r.noProject) return { content: "", noProject: true, note: "Live set unsaved — save the set first to enable the intent log." };
+  if (r && r.error && !r.content) return { content: "", error: r.error };
+  return { content: (r && r.content) || "", key: r && (r.intent_file || r.project_path) };
+}
+
+async function writeIntent(content) {
+  const r = await query("write_intent_file", encodeURIComponent(content));
+  if (r && r.noProject) return { ok: false, error: "Live set unsaved — save the set first to enable the intent log." };
+  if (!r) return { ok: false, error: "No response from write_intent_file" };
+  return r;
 }
 
 export const tools = [
@@ -45,7 +62,7 @@ export const tools = [
   },
   {
     name: "get_track_devices",
-    description: "Returns the device chain for a specific track by name (case-insensitive). Recursively walks into Effect Rack / Instrument Rack chains so nested devices appear flat with chain_path showing the rack/chain location. Each device returns name, class, active state, can_have_chains, plus snapshot gain_reduction_db on dynamics devices that expose it.",
+    description: "Returns the device chain for a specific track by name (case-insensitive). Recursively walks into Effect Rack / Instrument Rack chains so nested devices appear flat with chain_path showing the rack/chain location. STRUCTURE ONLY: each device returns its index, name, class, inferred class (native devices only), enabled state (off / bypassed), and a rack flag. To read a device's actual settings (EQ corners, comp threshold/ratio, etc.) call get_device_params once a finding implicates it. Gain reduction is NOT here — it's a per-device time series in the analyze_section capture.",
     input_schema: {
       type: "object",
       properties: { track_name: { type: "string", description: "Track name (fuzzy matched)" } },
@@ -54,7 +71,7 @@ export const tools = [
   },
   {
     name: "get_device_params",
-    description: "Returns all parameters of a specific device with value, display value (e.g. '-3.0 dB'), min, max, is_quantized, automation_state, and value_items (enum labels). CRITICAL: Call this whenever you're about to describe what a device is actually doing — never describe a device's behavior (drive, dry/wet, threshold, frequency, etc.) without first inspecting its parameters.",
+    description: "Returns a device's parameters — each with its index, name, and display value (e.g. '-3.0 dB'); min/max when not normalized; enum option labels and a quantized flag where applicable; and automation state. Also reports the device's enabled state (off / bypassed). CRITICAL: Call this whenever you're about to describe what a device is actually doing — never describe a device's behavior (drive, dry/wet, threshold, frequency, etc.) without first inspecting its parameters.",
     input_schema: {
       type: "object",
       properties: {
@@ -109,6 +126,22 @@ export const tools = [
       type: "object",
       properties: {
         content: { type: "string", description: "Full markdown content to save. Replaces existing memory entirely." }
+      },
+      required: ["content"]
+    }
+  },
+  {
+    name: "get_intent",
+    description: "Reads the intent log for this project — the running record of what the user wants specific elements to do, accumulated across this and previous sessions. This is 'the mixing intent gathered so far': load it before judging deviations, because a trait is a problem only against what its element is meant to do. Distinct from get_memory (the durable project identity): this is the provisional, granular, element-level layer. Returns the log text, or empty string if nothing is noted yet.",
+    input_schema: { type: "object", properties: {}, required: [] }
+  },
+  {
+    name: "note_intent",
+    description: "Updates the intent log — the working record of what the user wants specific elements to do, captured as they reveal it (e.g. 'hats: keep tight', 'bass: aggressive', 'vocal: up front'). Note a hint the MOMENT it surfaces in conversation, proactively, without waiting to be asked or for confirmation. Read get_intent first, then write back the full revised log: add new intents, supersede ones the user has changed, drop what's stale — keep it terse, one intent per line, element-tagged. Persists across sessions. NOT for: durable project identity (genre / references / delivery target → save_memory), measurements, or applied changes. Promote an intent to save_memory only once it proves stable and project-defining.",
+    input_schema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "Full updated intent log. Replaces the existing log entirely." }
       },
       required: ["content"]
     }
@@ -274,6 +307,12 @@ export async function runTool(name, input) {
     case "save_memory": {
       const content = input.content || "";
       return await writeMemory(content);
+    }
+    case "get_intent":
+      return await readIntent();
+    case "note_intent": {
+      const content = input.content || "";
+      return await writeIntent(content);
     }
     case "analyze_section": {
       // Mode resolution. Arrangement starter = start_locator OR start_beat; Session

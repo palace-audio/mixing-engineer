@@ -159,12 +159,6 @@ function compactSpectrum(spectrum) {
   return { hz, m, sm };
 }
 
-// Master / focus time_series both come from Max as {t:[...], l:[...], r:[...]}
-// — variable-rate parallel arrays (post-RDP). Pass through unchanged. The
-// legacy reshape paths are kept as no-ops for any older capture data.
-function compactTimeSeriesObjects(ts) { return ts; }
-function compactTimeSeriesTuples(ts) { return ts; }
-
 // Master: peak_left/right/rms_left/right → peak:[L,R], rms:[L,R] (peak is a real
 // time-domain sample peak). Focus (isFocus): there is NO true peak — both numbers
 // come from the FFT-frame RMS, so they're labeled rms_max:[L,R] (loudest frame)
@@ -205,16 +199,20 @@ function compactLufs(lufs) {
 // Per-tool compressors
 // ============================================================================
 
-// One compact device representation, shared by the per-voice focus chain, the
-// parent group chain, and get_track_devices — so the AI sees ONE device shape
-// everywhere. Raw listDevices entry → {i, name, class, class_inferred, native?,
-// off?, gr_db?, eq?, chain_path?}. Key params ride inline (eq corners, snapshot
-// GR) so reading the chain never needs a get_device_params round-trip.
-// On/off + chain topology, shared by both device-compaction paths so they never diverge.
-// own_on is the device's own switch (null ⇒ unreadable → fall back to is_active). off = the
-// device itself is switched off. bypassed = switch ON but the device is effectively inactive
-// because an enclosing rack/chain mutes or zones it out (is_active 0) — is_active alone
-// conflates the two. chains = the rack's chain topology, incl. empty/dry pass-through chains.
+// THE one compact device representation — shared by the per-voice focus chain, the
+// parent group chain, AND get_track_devices (compressTrackDevices delegates here),
+// so the AI sees ONE device shape everywhere. STRUCTURE ONLY (the "ship structure,
+// pull params" rule): raw listDevices entry → {i, name, class, class_inferred,
+// native?, off?|bypassed?, rack?, chain_path?}. NO parameter fields ride inline —
+// a device setting (EQ corners, comp threshold, GR…) is pulled on demand via
+// get_device_params once a finding implicates that device.
+//
+// applyDeviceState resolves the enabled state and is shared with get_device_params
+// so the two never diverge. own_on is the device's own switch (null ⇒ unreadable →
+// fall back to is_active). off = the device itself is switched off. bypassed = switch
+// ON but effectively inactive because an enclosing rack/chain mutes or zones it out
+// (is_active 0) — is_active alone conflates the two. chains = the rack's chain
+// topology, incl. empty/dry pass-through chains.
 function applyDeviceState(o, d) {
   const own = d.own_on != null ? d.own_on : d.is_active;
   if (own === false) o.off = true;
@@ -227,10 +225,9 @@ function compactDeviceEntry(d) {
   const { native, class_inferred } = classifyDevice(d.class_name, d.name);
   if (!native) o.native = false;
   o.class_inferred = class_inferred;
-  applyDeviceState(o, d);
-  if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
-  if (d.eq_bands_active) o.eq = d.eq_bands_active;
   if (d.chain_path) o.chain_path = d.chain_path;
+  applyDeviceState(o, d);
+  if (d.can_have_chains) o.rack = true;
   return o;
 }
 
@@ -526,52 +523,29 @@ function classifyDevice(className, deviceName) {
   if (isM4L && deviceName && NATIVE_M4L_NAMES[deviceName]) {
     return { native: true, class_inferred: NATIVE_M4L_NAMES[deviceName] };
   }
-  const n = String(deviceName || "").toLowerCase();
-  const pairs = [
-    ["ducker", "sidechain_comp"], ["sidechain", "sidechain_comp"],
-    ["maximizer", "limiter"], ["limiter", "limiter"],
-    ["clipper", "clipper"],
-    ["multiband", "multiband_comp"],
-    ["compressor", "comp"], [" comp", "comp"],
-    ["pro-q", "eq"], ["equalizer", "eq"], [" eq", "eq"],
-    ["reverb", "reverb"], ["verb", "reverb"],
-    ["echo", "delay"], ["delay", "delay"],
-    ["saturator", "saturation"], ["saturation", "saturation"],
-    ["distortion", "saturation"], ["overdrive", "saturation"], ["fuzz", "saturation"],
-    ["chorus", "modulation"], ["flanger", "modulation"], ["phaser", "modulation"],
-    ["gate", "gate"],
-    ["utility", "utility"], ["analyzer", "analyzer"], ["meter", "analyzer"],
-    ["filter", "filter"]
-  ];
-  for (const [needle, cls] of pairs) {
-    if (n.indexOf(needle) !== -1) return { native: false, class_inferred: cls };
-  }
+  // Third-party (VST/AU): do NOT guess the class from the name. A hand-picked keyword
+  // table both tunnels and misclassifies (FabFilter Pro-C, OTT, Soothe, Serum, ValhallaRoom…
+  // all miss or mislabel), and grows reactively. The model reads the device's own name plus
+  // the signal far better than any substring map — so ship native:false + the raw name and
+  // let the brain classify. class_inferred is authoritative only for native devices.
   return { native: false, class_inferred: "unknown" };
 }
 
+// Delegates to the shared compactDeviceEntry so get_track_devices and the
+// capture's focus/group chains can never drift to different device shapes.
+// (Absence of `native` means native — saves tokens; `native:false` is the
+// explicit opaque-params signal for third-party devices.)
 function compressTrackDevices(r) {
   if (!r.devices) return r;
-  return {
-    devices: r.devices.map(d => {
-      const o = { i: d.index, name: d.name, class: d.class_name };
-      const { native, class_inferred } = classifyDevice(d.class_name, d.name);
-      // Absence of `native` means native (default — saves tokens). Emit only
-      // when third-party so the AI sees an explicit opaque-params signal.
-      if (!native) o.native = false;
-      o.class_inferred = class_inferred;
-      if (d.chain_path) o.chain_path = d.chain_path;
-      applyDeviceState(o, d);
-      if (d.can_have_chains) o.rack = true;
-      if (d.gain_reduction_db != null) o.gr_db = d.gain_reduction_db;
-      if (d.eq_bands_active) o.eq = d.eq_bands_active;
-      return o;
-    })
-  };
+  return { devices: r.devices.map(compactDeviceEntry) };
 }
 
 function compressDeviceParams(r) {
   if (!r.params) return r;
   const out = { name: r.name, class: r.class_name };
+  // Reconciled enabled-state (off / bypassed) from own_on + is_active — the authoritative
+  // pair, shared with the device-list path. The AI reads this, not a "Device On" param glyph.
+  applyDeviceState(out, r);
   // EQ Eight: the 8×~5 per-band params are huge and fully summarized by
   // eq_bands_active — drop them, keep only globals (output gain, mode, scale).
   // Band param names start with a digit ("1 Frequency A", "2 Filter On A", …).

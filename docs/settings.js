@@ -1,4 +1,6 @@
-import { validateApiKey } from "./anthropic.js";
+// validateApiKey is imported lazily (only when the user picks Anthropic) so this
+// module — loaded at boot via mountSettings — never pulls anthropic.js / the esm.sh
+// SDK on the local/OpenRouter path. validateProvider lives in the SDK-free openai.js.
 import { validateProvider } from "./openai.js";
 
 // One stored config for every provider: {provider, baseUrl, model, apiKey}.
@@ -41,7 +43,7 @@ const PROVIDERS = {
     help: "Enter the server base URL (…/v1) and a model it serves."
   }
 };
-const DEFAULT_PROVIDER = "anthropic";
+const DEFAULT_PROVIDER = "";  // no pre-selection — user must choose
 
 // Returns the stored config, migrating a legacy Anthropic-only key on first read.
 export function getStoredConfig() {
@@ -93,6 +95,9 @@ export function mountSettings({ onSaved, onCleared }) {
   const menuChange   = document.getElementById("settings-change");
   const menuClear    = document.getElementById("settings-clear");
 
+  const phOpt = document.createElement("option");
+  phOpt.value = ""; phOpt.textContent = "Select a provider…"; phOpt.disabled = true;
+  providerSel.appendChild(phOpt);
   for (const [id, p] of Object.entries(PROVIDERS)) {
     const opt = document.createElement("option");
     opt.value = id;
@@ -102,7 +107,7 @@ export function mountSettings({ onSaved, onCleared }) {
 
   // Show/hide and relabel fields to match the selected provider.
   function applyProviderUI() {
-    const p = PROVIDERS[providerSel.value] || PROVIDERS[DEFAULT_PROVIDER];
+    const p = PROVIDERS[providerSel.value] || {};
     baseUrlRow.classList.toggle("hidden", !p.baseUrlEditable);
     if (!p.baseUrlEditable) baseUrlInput.value = p.baseUrl || "";
     else if (!baseUrlInput.value) baseUrlInput.value = p.baseUrl || "";
@@ -124,7 +129,7 @@ export function mountSettings({ onSaved, onCleared }) {
 
   function showOverlay(prefill) {
     const cfg = prefill || {};
-    providerSel.value = PROVIDERS[cfg.provider] ? cfg.provider : DEFAULT_PROVIDER;
+    providerSel.value = (cfg.provider && PROVIDERS[cfg.provider]) ? cfg.provider : "";
     baseUrlInput.value = cfg.baseUrl || "";
     modelInput.value = cfg.model || "";
     keyInput.value = "";   // never prefill the secret
@@ -142,7 +147,8 @@ export function mountSettings({ onSaved, onCleared }) {
 
   async function trySave() {
     const provider = providerSel.value;
-    const p = PROVIDERS[provider] || PROVIDERS[DEFAULT_PROVIDER];
+    if (!provider || !PROVIDERS[provider]) { errEl.textContent = "Select a provider."; return; }
+    const p = PROVIDERS[provider];
     const baseUrl = p.baseUrlEditable ? (baseUrlInput.value || "").trim() : (p.baseUrl || "");
     const model = p.needsModel ? (modelInput.value || "").trim() : "";
     let apiKey = (keyInput.value || "").trim();
@@ -162,7 +168,7 @@ export function mountSettings({ onSaved, onCleared }) {
 
     saveBtn.disabled = true; saveBtn.textContent = "Validating…"; errEl.textContent = "";
     const result = provider === "anthropic"
-      ? await validateApiKey(apiKey)
+      ? await (await import("./anthropic.js")).validateApiKey(apiKey)
       : await validateProvider({ provider, baseUrl, apiKey });
     saveBtn.disabled = false; saveBtn.textContent = "Save";
 

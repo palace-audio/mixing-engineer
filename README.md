@@ -64,7 +64,7 @@ The running cost — or **free**, for local — shows in the corner of the chat 
 
 ## Privacy and cost
 
-- **Your API key is stored on your computer only.** It never leaves your machine except to call your chosen provider directly. The device has no server of its own.
+- **Your API key is stored on your computer only**, in this device's local browser storage as plain text — the trade-off for a bring-your-own-key tool that runs with no server of its own. It never leaves your machine except to call your chosen provider directly. To remove it, clear the device's settings, or use a local provider (Ollama / LM Studio), which needs no key at all.
 - **Audio is summarized into numbers before being sent.** The model sees frequency balance, peak levels, and the like — never the raw audio.
 - **You pay your provider directly**, or nothing if you run a local model. No subscription to anyone else.
 
