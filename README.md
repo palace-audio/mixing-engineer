@@ -2,7 +2,7 @@
 
 A mixing engineer for Max for Live: ask it anything about your mix and it answers, grounded in signal analysis. Drop it on the master track and get specific feedback — frequency balance, dynamics, masking, loudness, the works.
 
-It's not a replacement for your ears — it's an experienced second opinion, always there on your shoulder.
+It's not a replacement for your ears but rather an experienced second opinion, always there on your shoulder.
 
 ## Rationale and Philosophy
 
