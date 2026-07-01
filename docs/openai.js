@@ -30,6 +30,13 @@ const OPENROUTER_TITLE = "Palace Audio Mixing Engineer";
 // over here with a smaller cap.
 const DEFAULT_MAX_TOKENS = 16384;
 
+// Reasoning-effort default for non-local (OpenRouter / custom) providers. DeepSeek
+// V4 (Flash + Pro) is a reasoning-capable hybrid; "high" turns it on (DeepSeek also
+// accepts "xhigh" = max). Flip to null to turn reasoning off. A config-supplied
+// `reasoningEffort` still overrides this. Local servers never receive it regardless
+// (gated at send). This is the TEST lever until a settings-UI field is the real home.
+const DEFAULT_REASONING_EFFORT = "high";
+
 // Anthropic tool schemas ({name, description, input_schema}) → OpenAI tool
 // schemas ({type:"function", function:{name, description, parameters}}). The
 // input_schema IS a JSON Schema, so it passes straight through as `parameters`
@@ -59,14 +66,20 @@ function unreachableHint(provider, base) {
 }
 
 export class OpenAICompatSession {
-  constructor({ provider, baseUrl, model, apiKey, maxTokens,
+  constructor({ provider, baseUrl, model, apiKey, maxTokens, reasoningEffort,
                 onText, onToolStart, onDone, onError, onUsage, onAskUserChoice }) {
     const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
     this.provider = provider || "ollama";
+    this.local = !!preset.local;
     this.baseUrl = (baseUrl || preset.baseUrl || "").replace(/\/+$/, "");
     this.model = model || "";
     this.apiKey = apiKey || "";
     this.maxTokens = maxTokens || DEFAULT_MAX_TOKENS;
+    // Resolve effort: an explicit config value wins; otherwise the non-local
+    // default (DEFAULT_REASONING_EFFORT above). Local servers resolve to null and
+    // also never receive it (gated in _fetchChat) — Ollama/LM Studio may reject an
+    // unknown field. OpenRouter passes `reasoning` through to DeepSeek V4.
+    this.reasoningEffort = reasoningEffort || (this.local ? null : DEFAULT_REASONING_EFFORT);
     // Translate the shared tool schemas once; they never change within a session.
     this.openaiTools = toOpenAITools(tools);
     this.messages = [];
@@ -115,7 +128,10 @@ export class OpenAICompatSession {
       // OpenRouter returns real spend in usage.cost ONLY when asked; every other
       // compat server ignores the unknown field. This is what makes the live
       // OpenRouter "$" readout possible.
-      ...(this.provider === "openrouter" ? { usage: { include: true } } : {})
+      ...(this.provider === "openrouter" ? { usage: { include: true } } : {}),
+      // Reasoning effort (OpenRouter unified param) — only when set and non-local.
+      ...(this.reasoningEffort && !this.local
+        ? { reasoning: { effort: this.reasoningEffort } } : {})
     });
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       let resp;
